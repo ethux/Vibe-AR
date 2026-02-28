@@ -87,6 +87,47 @@ class StreamScreenWindow {
     // Redraw with new resolution
     win._drawContentCanvas();
 
+    // ── Remote cursor control via Quest pointer ──
+    // onContentInteraction receives local coords on the content plane.
+    // We must map pointer position to the VIDEO area only, excluding
+    // the status bar and any letterbox padding in the canvas.
+    win.onContentInteraction = (localPoint, type, handIdx) => {
+      if (!localPoint || !self._ws || self._ws.readyState !== 1) return;
+      if (!self._img.naturalWidth) return;
+
+      // localPoint is in mesh-local coords: x [-contentW/2..+contentW/2], y [-contentH/2..+contentH/2]
+      const cw = win._contentW;
+      const ch = win._contentH;
+      // Convert to canvas pixel coords (0..CANVAS_W, 0..CANVAS_H)
+      const canvasX = ((localPoint.x / cw) + 0.5) * win.CANVAS_W;
+      const canvasY = (1.0 - ((localPoint.y / ch) + 0.5)) * win.CANVAS_H;
+
+      // Replicate the same layout math from _drawFrame to find the video rect
+      const W = win.CANVAS_W;
+      const H = win.CANVAS_H;
+      const statusH = 28;
+      const maxW = W;
+      const maxH = H - statusH;
+      const scale = Math.min(maxW / self._img.naturalWidth, maxH / self._img.naturalHeight);
+      const drawW = self._img.naturalWidth * scale;
+      const drawH = self._img.naturalHeight * scale;
+      const imgX = (W - drawW) / 2;
+      const imgY = (maxH - drawH) / 2;
+
+      // Map canvas pixel to UV within the video rect
+      const u = (canvasX - imgX) / drawW;
+      const v = (canvasY - imgY) / drawH;
+
+      // Only send if pointer is within the video area
+      if (u < 0 || u > 1 || v < 0 || v > 1) return;
+
+      if (type === 'tap') {
+        self._ws.send(JSON.stringify({ type: 'click', u: u, v: v }));
+      } else if (type === 'start') {
+        self._ws.send(JSON.stringify({ type: 'move', u: u, v: v }));
+      }
+    };
+
     // Hook into update loop for FPS counter
     const origUpdate = this._win.update.bind(this._win);
     this._win.update = (dt, elapsed) => {
