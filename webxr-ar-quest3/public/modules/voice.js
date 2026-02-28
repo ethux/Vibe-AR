@@ -32,7 +32,7 @@ async function transcribeAndSend(blob, mime) {
         termWs.send(new TextEncoder().encode('0' + text.trim() + '\r'));
         log(`[STT] Sent: "${text.trim()}"`);
         if (cmdInput) cmdInput.value = '';
-        speakReply(text.trim());
+        speakReply();
       }
     } else {
       if (cmdInput) cmdInput.placeholder = 'No speech detected';

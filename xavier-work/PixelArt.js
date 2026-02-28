@@ -4,14 +4,24 @@
 
 const PixelArt = {
 
-  // Mistral brand orange palette
-  ORANGE_LIGHT:  '#FFB347',
-  ORANGE:        '#F97316',
-  ORANGE_DARK:   '#C2410C',
-  ORANGE_SHADOW: '#7C2D12',
-  BLACK:         '#000000',
-  DARK_BG:       '#0A0A0A',
-  BORDER_BG:     '#111111',
+  // Windows 95 palette
+  TITLE_BLUE:    '#000080',   // Active title bar (navy)
+  TITLE_BLUE_LT: '#1084D0',  // Title bar gradient right
+  TITLE_GRAY:    '#808080',   // Inactive title bar
+  WHITE:         '#FFFFFF',   // Title text, highlights
+  SILVER:        '#C0C0C0',   // Window frame / button face
+  DARK_GRAY:     '#808080',   // 3D bevel shadow (inner)
+  SHADOW:        '#404040',   // 3D bevel shadow (outer)
+  BLACK:         '#000000',   // Darkest edge
+  BTN_FACE:      '#C0C0C0',   // Button face
+  BTN_HIGHLIGHT: '#DFDFDF',   // Button 3D highlight
+  BTN_SHADOW:    '#808080',   // Button 3D shadow
+
+  // Legacy aliases
+  ORANGE_LIGHT:  '#FFFFFF',
+  ORANGE:        '#000080',
+  DARK_BG:       '#000080',
+  BORDER_BG:     '#C0C0C0',
 
   /**
    * Draw a single "fat pixel" on a canvas context.

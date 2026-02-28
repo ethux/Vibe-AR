@@ -14,6 +14,11 @@ RUN apt-get update && apt-get install -y \
 # Install vibe
 RUN pip install --no-cache-dir mistral-vibe
 
+# Configure Vibe to route API calls through web server proxy (for TTS capture)
+# Place config in both global (~/.vibe) and workspace (.vibe) locations
+RUN mkdir -p /root/.vibe /workspace/.vibe && \
+    printf '[[providers]]\nname = "mistral"\napi_base = "http://web:3001/mistral-proxy/v1"\napi_key_env_var = "MISTRAL_API_KEY"\nbackend = "generic"\n' | tee /root/.vibe/config.toml /workspace/.vibe/config.toml > /dev/null
+
 # Working directory for vibe sessions
 WORKDIR /workspace
 
