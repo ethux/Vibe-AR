@@ -133,20 +133,6 @@ class CodeCityRenderer {
   renderCity(layout) {
     this._layout = layout;
 
-    // Ground plane
-    const groundGeo = new THREE.PlaneGeometry(4, 4);
-    const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x111111,
-      transparent: true,
-      opacity: 0.6,
-      roughness: 0.9,
-      side: THREE.DoubleSide
-    });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.01;
-    this.cityGroup.add(ground);
-
     // Districts (colored ground plates)
     if (layout.districts) {
       for (const d of layout.districts) {
@@ -362,10 +348,12 @@ class CodeCityRenderer {
       }
     }
 
+    const now = performance.now();
     if (closestEntry && closestEntry !== this._hoveredEntry) {
       this._hoveredEntry = closestEntry;
+      this._hoverLockUntil = now + 500; // hold for 500ms min
       this._showTooltip(closestEntry);
-    } else if (!closestEntry && this._hoveredEntry) {
+    } else if (!closestEntry && this._hoveredEntry && now > this._hoverLockUntil) {
       this._hoveredEntry = null;
       this._hideTooltip();
     }
