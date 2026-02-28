@@ -437,34 +437,56 @@ class CodeCityRenderer {
 
     if (gs.grabbing && otherGs.grabbing) {
       // ── Two-hand: move + rotate + scale ──
+      // Grab points stay locked to where the hands originally touched.
       if (!this._twoHandAnchor) this._initTwoHandAnchor();
       const anchor = this._twoHandAnchor;
 
       const p0 = this._grabState[0].point;
       const p1 = this._grabState[1].point;
 
-      // Current distance & midpoint between hands
-      const currentDist = p0.distanceTo(p1);
-      const midX = (p0.x + p1.x) / 2;
-      const midY = (p0.y + p1.y) / 2;
-      const midZ = (p0.z + p1.z) / 2;
+      // Local grab points (in city local space at grab time)
+      const lx0 = anchor.local0.x, lz0 = anchor.local0.z;
+      const lx1 = anchor.local1.x, lz1 = anchor.local1.z;
+
+      // World hand positions
+      const wx0 = p0.x, wz0 = p0.z;
+      const wx1 = p1.x, wz1 = p1.z;
+
+      // Local vector between grab points
+      const ldx = lx1 - lx0, ldz = lz1 - lz0;
+      const localDist = Math.sqrt(ldx * ldx + ldz * ldz);
+
+      // World vector between hands
+      const wdx = wx1 - wx0, wdz = wz1 - wz0;
+      const worldDist = Math.sqrt(wdx * wdx + wdz * wdz);
 
       // Scale
-      const scaleFactor = (currentDist / anchor.startDist) * anchor.startScale;
-      const clampedScale = Math.max(0.05, Math.min(5.0, scaleFactor));
-      this.cityGroup.scale.setScalar(clampedScale);
+      const newScale = (localDist > 0.001)
+        ? Math.max(0.05, Math.min(5.0, worldDist / localDist))
+        : anchor.startScale;
+      this.cityGroup.scale.setScalar(newScale);
 
-      // Rotation (around Y axis)
-      const currentAngle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
-      const deltaAngle = currentAngle - anchor.startAngle;
-      this.cityGroup.rotation.y = anchor.startRotY + deltaAngle;
+      // Rotation
+      const localAngle = Math.atan2(ldx, ldz);
+      const worldAngle = Math.atan2(wdx, wdz);
+      const newRotY = worldAngle - localAngle;
+      this.cityGroup.rotation.y = newRotY;
 
-      // Position: follow midpoint with offset
-      this.cityGroup.position.set(
-        midX + anchor.startPosOffset.x,
-        midY + anchor.startPosOffset.y,
-        midZ + anchor.startPosOffset.z
-      );
+      // Position: place so local0 maps exactly to hand0 in world
+      const cosR = Math.cos(newRotY);
+      const sinR = Math.sin(newRotY);
+      const sx = lx0 * newScale;
+      const sz = lz0 * newScale;
+      const rx = sx * cosR + sz * sinR;
+      const rz = -sx * sinR + sz * cosR;
+
+      this.cityGroup.position.x = wx0 - rx;
+      this.cityGroup.position.z = wz0 - rz;
+
+      // Y: average of hands minus average of local grab Y scaled
+      this.cityGroup.position.y = (p0.y + p1.y) / 2
+        - (anchor.local0.y + anchor.local1.y) / 2 * newScale;
+
     } else if (gs.grabbing) {
       // ── Single-hand: drag/move only ──
       this.cityGroup.position.copy(grabPoint).add(gs.offset);
@@ -475,20 +497,16 @@ class CodeCityRenderer {
     const p0 = this._grabState[0].point;
     const p1 = this._grabState[1].point;
 
-    const midX = (p0.x + p1.x) / 2;
-    const midY = (p0.y + p1.y) / 2;
-    const midZ = (p0.z + p1.z) / 2;
+    // Convert hand world positions to cityGroup LOCAL space
+    const invMatrix = new THREE.Matrix4().copy(this.cityGroup.matrixWorld).invert();
+
+    const local0 = new THREE.Vector3(p0.x, p0.y, p0.z).applyMatrix4(invMatrix);
+    const local1 = new THREE.Vector3(p1.x, p1.y, p1.z).applyMatrix4(invMatrix);
 
     this._twoHandAnchor = {
-      startDist: Math.max(0.01, p0.distanceTo(p1)),
+      local0: local0,
+      local1: local1,
       startScale: this.cityGroup.scale.x,
-      startAngle: Math.atan2(p1.x - p0.x, p1.z - p0.z),
-      startRotY: this.cityGroup.rotation.y,
-      startPosOffset: new THREE.Vector3(
-        this.cityGroup.position.x - midX,
-        this.cityGroup.position.y - midY,
-        this.cityGroup.position.z - midZ
-      )
     };
   }
 
