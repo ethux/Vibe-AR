@@ -506,6 +506,9 @@ renderer.setAnimationLoop((timestamp, frame) => {
   // ── Update WindowManager (handles controller drag, hover, resize) ──
   wm.update(frame, dt, elapsed, [controller0, controller1]);
 
+  // ── Matrix rain: update all building canvas textures ──
+  codeCity.updateMatrix(dt);
+
   // ── Update Code City hover detection ──
   codeCity.updateHover([controller0, controller1]);
 
