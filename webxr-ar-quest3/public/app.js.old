@@ -752,10 +752,9 @@ async function transcribeAndSend(blob, mime) {
         termWs.send(new TextEncoder().encode('0' + text.trim() + '\r'));
         log(`[STT] Sent: "${text.trim()}"`);
         if (cmdInput) cmdInput.value = '';
-        // Enable TTS for this response
+        // Enable TTS — record current buffer position so we read only the response
+        ttsStartLine = term ? term.buffer.active.baseY + term.buffer.active.cursorY : 0;
         ttsCollecting = true;
-        ttsBuffer = '';
-        ttsLineCount = 0;
       }
     } else {
       if (cmdInput) cmdInput.placeholder = 'No speech detected';
@@ -810,48 +809,51 @@ function stopRecording() {
 
 // ─── TTS (ElevenLabs) — speak terminal responses ───
 let ttsCollecting = false;
-let ttsBuffer = '';
-let ttsLineCount = 0;
+let ttsStartLine = 0;  // buffer line where the command was sent
 let ttsTimeout = null;
 let ttsSpeaking = false;
 
-function onTermOutput(text) {
+function onTermOutput() {
   if (!ttsCollecting) return;
-  ttsBuffer += text;
-  ttsLineCount += (text.match(/\n/g) || []).length;
-
-  // Reset the idle timer — after 1.5s of no output, assume response is done
+  // Reset idle timer — after 2s of no output, read response from xterm buffer
   clearTimeout(ttsTimeout);
-  ttsTimeout = setTimeout(() => finishTtsCollect(), 1500);
-
-  // Safety cap
-  if (ttsLineCount > 40) finishTtsCollect();
+  ttsTimeout = setTimeout(() => finishTtsCollect(), 2000);
 }
 
 function finishTtsCollect() {
   clearTimeout(ttsTimeout);
   ttsCollecting = false;
-  // Clean ANSI codes and extract readable text
-  const clean = ttsBuffer
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // strip ANSI escapes
-    .replace(/\x1b\][^\x07]*\x07/g, '')       // strip OSC sequences
-    .replace(/[\x00-\x1f]/g, '\n')            // control chars → newlines
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 0)
-    .join(' ')
-    .trim();
+  if (!term) return;
 
-  ttsBuffer = '';
-  ttsLineCount = 0;
+  // Read lines from xterm's parsed buffer (already stripped of ANSI)
+  const buf = term.buffer.active;
+  const endLine = buf.baseY + buf.cursorY;
+  const lines = [];
+  for (let i = ttsStartLine + 1; i < endLine; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true).trim();
+    if (text) lines.push(text);
+  }
 
-  if (clean.length < 10) { log('[TTS] Response too short, skipping'); return; }
-  if (/^(root@|\$|#|>)\s*$/.test(clean)) return;
+  // Filter out prompts and command echoes
+  const filtered = lines.filter(l => {
+    if (/^(root@|vibe>|\$|#|>>>)\s*/i.test(l)) return false;  // prompts
+    if (/^\[.*\]\s*$/.test(l)) return false;  // status bars like [vibe v2.3.0]
+    return true;
+  });
 
-  const ttsText = clean.length > 500 ? clean.substring(0, 500) + '...' : clean;
-  log(`[TTS] Speaking ${ttsText.length} chars`);
+  const responseText = filtered.join(' ').trim();
+  if (responseText.length < 10) { log('[TTS] Response too short, skipping'); return; }
+
+  const ttsText = responseText.length > 500 ? responseText.substring(0, 500) + '...' : responseText;
+  log(`[TTS] Speaking ${ttsText.length} chars: "${ttsText.substring(0, 80)}..."`);
   speakTTS(ttsText);
 }
+
+// Streaming PCM playback — plays chunks as they arrive from ElevenLabs
+const PCM_RATE = 24000;
+const PCM_CHUNK_SAMPLES = 4800; // 0.2s per chunk — low latency
 
 async function speakTTS(text) {
   if (ttsSpeaking) return;
@@ -868,19 +870,67 @@ async function speakTTS(text) {
       ttsSpeaking = false;
       return;
     }
-    const arrayBuffer = await res.arrayBuffer();
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    source.onended = () => { ttsSpeaking = false; };
-    source.start();
-    log('[TTS] Playing audio');
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_RATE });
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 3.0;
+    gainNode.connect(audioCtx.destination);
+    const reader = res.body.getReader();
+    let nextTime = audioCtx.currentTime;
+    let leftover = new Uint8Array(0);
+
+    log('[TTS] Streaming audio...');
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Merge leftover + new chunk
+      const merged = new Uint8Array(leftover.length + value.length);
+      merged.set(leftover);
+      merged.set(value, leftover.length);
+
+      // Schedule complete chunks (PCM_CHUNK_SAMPLES * 2 bytes each)
+      const chunkBytes = PCM_CHUNK_SAMPLES * 2;
+      let offset = 0;
+      while (offset + chunkBytes <= merged.length) {
+        const slice = merged.slice(offset, offset + chunkBytes);
+        scheduleChunk(audioCtx, gainNode, slice, nextTime);
+        nextTime += PCM_CHUNK_SAMPLES / PCM_RATE;
+        offset += chunkBytes;
+      }
+      leftover = merged.slice(offset);
+    }
+
+    // Play remaining samples
+    if (leftover.length >= 2) {
+      const samples = Math.floor(leftover.length / 2);
+      scheduleChunk(audioCtx, gainNode, leftover.slice(0, samples * 2), nextTime);
+      nextTime += samples / PCM_RATE;
+    }
+
+    // Cleanup after playback finishes
+    const remaining = nextTime - audioCtx.currentTime;
+    setTimeout(() => { ttsSpeaking = false; audioCtx.close(); }, Math.max(0, remaining * 1000) + 200);
   } catch (e) {
     log(`[TTS] ${e.message}`);
     ttsSpeaking = false;
   }
+}
+
+function scheduleChunk(audioCtx, gainNode, pcmBytes, startTime) {
+  const samples = pcmBytes.length / 2;
+  const float32 = new Float32Array(samples);
+  const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
+  for (let i = 0; i < samples; i++) {
+    float32[i] = view.getInt16(i * 2, true) / 32768;
+  }
+  const buf = audioCtx.createBuffer(1, samples, PCM_RATE);
+  buf.getChannelData(0).set(float32);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gainNode);
+  if (startTime < audioCtx.currentTime) startTime = audioCtx.currentTime;
+  src.start(startTime);
 }
 
 // ─── Boot ───

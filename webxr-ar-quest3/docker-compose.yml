@@ -16,6 +16,7 @@ services:
       - "3001:3001"
     volumes:
       - ./public:/app/public
+      - ./server:/app/server
       - ./certs:/app/certs:ro
     environment:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
