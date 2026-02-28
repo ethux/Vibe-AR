@@ -908,39 +908,73 @@ renderer.setAnimationLoop((timestamp, frame) => {
 
         if (state.handedness === 'left') {
           // ── LEFT HAND ──────────────────────────────────────────────────
-          // Pinch on free bubble → add to palm context (orbit)
-          // Pinch in empty space → go back one folder
+          // Pinch on context bubble → remove from context
+          // Pinch on free bubble    → add to context (orbit in palm)
+          // Pinch on title bar      → drag window
+          // Palm open / closed      → show / hide context bubbles
+
           if (pinchResult.pinching && !state.pinching) {
             state.pinching = true;
             if (pinchResult.pinchPoint) {
-              let closest = null;
-              let closestDist = 0.12;
-              fileBubbles.forEach(b => {
-                if (b.userData.inPalm) return;
-                const d = pinchResult.pinchPoint.distanceTo(b.position);
-                if (d < closestDist) { closestDist = d; closest = b; }
-              });
-              if (closest) {
-                closest.userData.inPalm = true;
-                closest.userData.grabbed = false;
-                closest.userData.scaleTarget = 0.5;
-                closest.userData.palmOrbitIndex = palmBubbles.length;
-                closest.visible = true;
-                palmBubbles.push(closest);
-                markBubbleOpened(closest);
+              const titleWorldPos = new THREE.Vector3();
+              titleBar.getWorldPosition(titleWorldPos);
+              if (pinchResult.pinchPoint.distanceTo(titleWorldPos) < 0.15) {
+                // Drag window
+                state.dragging = true;
+                state.dragOffset.copy(windowBody.position).sub(pinchResult.pinchPoint);
+                borderMat.opacity = 0.7;
+                titleMat.color.set(0x5a5a8c);
               } else {
-                // Empty space pinch → go back one folder
-                const parts = currentPath.split('/').filter(Boolean);
-                if (parts.length > 1) {
-                  parts.pop();
-                  loadFiles(parts.join('/'));
-                } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
-                  loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
+                // Context bubble → remove
+                let palmClosest = null, palmDist = 0.12, palmIdx = -1;
+                palmBubbles.forEach((b, pi) => {
+                  const d = pinchResult.pinchPoint.distanceTo(b.position);
+                  if (d < palmDist) { palmDist = d; palmClosest = b; palmIdx = pi; }
+                });
+                if (palmClosest) {
+                  palmClosest.userData.inPalm = false;
+                  palmClosest.userData.opened = false;
+                  palmClosest.userData.scaleTarget = 1;
+                  palmClosest.userData.restPos.copy(palmClosest.userData.basePos);
+                  palmClosest.visible = true;
+                  if (openedBubble === palmClosest) openedBubble = null;
+                  palmBubbles.splice(palmIdx, 1);
+                  palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
+                } else {
+                  // Free bubble → add to context
+                  let closest = null, closestDist = 0.12;
+                  fileBubbles.forEach(b => {
+                    if (b.userData.inPalm) return;
+                    const d = pinchResult.pinchPoint.distanceTo(b.position);
+                    if (d < closestDist) { closestDist = d; closest = b; }
+                  });
+                  if (closest) {
+                    closest.userData.inPalm = true;
+                    closest.userData.grabbed = false;
+                    closest.userData.scaleTarget = 0.5;
+                    closest.userData.palmOrbitIndex = palmBubbles.length;
+                    closest.visible = true;
+                    palmBubbles.push(closest);
+                    markBubbleOpened(closest);
+                  }
                 }
               }
             }
           } else if (!pinchResult.pinching && state.pinching) {
             state.pinching = false;
+            if (state.dragging) {
+              state.dragging = false;
+              borderMat.opacity = 0.3;
+              titleMat.color.set(0x3a3a5c);
+            }
+          }
+
+          if (state.dragging && pinchResult.pinchPoint) {
+            const target = pinchResult.pinchPoint.clone().add(state.dragOffset);
+            windowBody.position.lerp(target, 0.4);
+            const camPos = new THREE.Vector3();
+            camera.getWorldPosition(camPos);
+            windowBody.lookAt(camPos);
           }
 
           // Track left palm center for orbit
@@ -949,17 +983,17 @@ renderer.setAnimationLoop((timestamp, frame) => {
             leftPalmCenter = palmData.palmCenter.clone();
             leftPalmCenter.y += 0.05;
           }
-          // Palm open → show palm bubbles orbiting, palm closed → hide them
+          // Palm open → show context bubbles, palm closed → hide
           palmBubbles.forEach(b => { b.visible = palmData.open; });
 
         } else {
           // ── RIGHT HAND ─────────────────────────────────────────────────
-          // Pinch on palm bubble → release back to scene
           // Pinch on free bubble → open file / navigate folder
-          // Closed fist (held) → rotate all bubbles around user
+          // Pinch in empty space → go back one folder
+          // Pinch on title bar   → drag window
+          // Closed fist (held)   → rotate scene around user
 
           const fistResult = detectFist(inputSource, frame, refSpace);
-
           if (fistResult.fisting) {
             if (!_fistRotating) {
               _fistRotating = true;
@@ -987,36 +1021,51 @@ renderer.setAnimationLoop((timestamp, frame) => {
           if (pinchResult.pinching && !state.pinching) {
             state.pinching = true;
             if (pinchResult.pinchPoint) {
-              // Check palm bubbles first
-              let closest = null, closestDist = 0.1, closestIdx = -1;
-              palmBubbles.forEach((b, pi) => {
-                if (!b.visible) return;
-                const d = pinchResult.pinchPoint.distanceTo(b.position);
-                if (d < closestDist) { closestDist = d; closest = b; closestIdx = pi; }
-              });
-              if (closest) {
-                // Release from palm → return to scene
-                closest.userData.inPalm = false;
-                closest.userData.opened = false;
-                closest.userData.scaleTarget = 1;
-                closest.userData.restPos.copy(closest.userData.basePos);
-                closest.visible = true;
-                if (openedBubble === closest) openedBubble = null;
-                palmBubbles.splice(closestIdx, 1);
-                palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
+              const titleWorldPos = new THREE.Vector3();
+              titleBar.getWorldPosition(titleWorldPos);
+              if (pinchResult.pinchPoint.distanceTo(titleWorldPos) < 0.15) {
+                // Drag window
+                state.dragging = true;
+                state.dragOffset.copy(windowBody.position).sub(pinchResult.pinchPoint);
+                borderMat.opacity = 0.7;
+                titleMat.color.set(0x5a5a8c);
               } else {
-                // Check free bubbles → open / navigate
+                // Free bubble → open / navigate
                 let freeClosest = null, freeClosestDist = 0.12;
                 fileBubbles.forEach(b => {
                   if (b.userData.inPalm) return;
                   const d = pinchResult.pinchPoint.distanceTo(b.position);
                   if (d < freeClosestDist) { freeClosestDist = d; freeClosest = b; }
                 });
-                if (freeClosest) openFileBubble(freeClosest);
+                if (freeClosest) {
+                  openFileBubble(freeClosest);
+                } else {
+                  // Empty space → go back one folder
+                  const parts = currentPath.split('/').filter(Boolean);
+                  if (parts.length > 1) {
+                    parts.pop();
+                    loadFiles(parts.join('/'));
+                  } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
+                    loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
+                  }
+                }
               }
             }
           } else if (!pinchResult.pinching && state.pinching) {
             state.pinching = false;
+            if (state.dragging) {
+              state.dragging = false;
+              borderMat.opacity = 0.3;
+              titleMat.color.set(0x3a3a5c);
+            }
+          }
+
+          if (state.dragging && pinchResult.pinchPoint) {
+            const target = pinchResult.pinchPoint.clone().add(state.dragOffset);
+            windowBody.position.lerp(target, 0.4);
+            const camPos = new THREE.Vector3();
+            camera.getWorldPosition(camPos);
+            windowBody.lookAt(camPos);
           }
         }
       });
