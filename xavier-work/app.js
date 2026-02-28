@@ -11,7 +11,7 @@ camera.position.set(0, 1.6, 0); // standing height
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
-renderer.setClearColor(0x000000, 0); // transparent background for AR
+renderer.setClearColor(0x000000, 0); // start transparent (AR)
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
@@ -22,14 +22,6 @@ dirLight.position.set(2, 4, 3);
 dirLight.castShadow = true;
 scene.add(dirLight);
 
-// ── Shadow-receiving floor ───────────────────
-const shadowFloorGeo = new THREE.PlaneGeometry(20, 20);
-const shadowFloorMat = new THREE.ShadowMaterial({ opacity: 0.3 });
-const shadowFloor = new THREE.Mesh(shadowFloorGeo, shadowFloorMat);
-shadowFloor.rotation.x = -Math.PI / 2;
-shadowFloor.position.y = 0;
-shadowFloor.receiveShadow = true;
-scene.add(shadowFloor);
 renderer.shadowMap.enabled = true;
 
 // ══════════════════════════════════════════════
@@ -83,8 +75,22 @@ if __name__ == "__main__":
     main()`;
 
 codeCity.analyzeCode(DEMO_CODE, 'python', 'calculator.py')
-  .then(layout => { if (layout) console.log('Code City loaded:', layout.cityName); })
+  .then(layout => {
+    if (layout) {
+      console.log('Code City loaded:', layout.cityName);
+      setDarkMode(true);
+    }
+  })
   .catch(err => console.warn('Code City demo skipped:', err.message));
+
+// ── Dark mode state (toggled by city load / hand clap) ──
+let darkMode = false;
+let darkModeSmooth = 0; // 0 = AR passthrough, 1 = fully dark
+let lastClapTime = 0;
+
+function setDarkMode(on) {
+  darkMode = on;
+}
 
 // Track per-hand animation state
 const handAnimState = [
@@ -495,6 +501,15 @@ function detectPinch(inputSource, frame, refSpace) {
   return { pinching: dist < 0.025, pinchPoint };
 }
 
+// ── Clap detection (both palms close together) ──
+function detectClap(handInputs, frame, refSpace) {
+  if (!handInputs[0] || !handInputs[1]) return false;
+  const leftPalm = getJointPos(handInputs[0], 'middle-finger-phalanx-proximal', frame, refSpace);
+  const rightPalm = getJointPos(handInputs[1], 'middle-finger-phalanx-proximal', frame, refSpace);
+  if (!leftPalm || !rightPalm) return false;
+  return leftPalm.distanceTo(rightPalm) < 0.06;
+}
+
 // ── Animation loop ───────────────────────────
 const clock = new THREE.Clock();
 let handDetectedOnce = false;
@@ -657,8 +672,24 @@ renderer.setAnimationLoop((timestamp, frame) => {
           if (wristPos) codeCity._rightHandPos = wristPos;
         }
       });
+
+      // ── Clap detection → toggle dark mode off ──
+      if (darkMode) {
+        const clapping = detectClap(handInputs, frame, refSpace);
+        const now = performance.now();
+        if (clapping && now - lastClapTime > 1000) {
+          lastClapTime = now;
+          setDarkMode(false);
+        }
+      }
     }
   }
+
+  // ── Smooth dark mode transition ──
+  const darkTarget = darkMode ? 1 : 0;
+  darkModeSmooth += (darkTarget - darkModeSmooth) * 0.08;
+  const a = Math.max(0, Math.min(1, darkModeSmooth));
+  renderer.setClearColor(0x0a0a0f, a);
 
   // ── Update animations ──
   const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
