@@ -51,22 +51,22 @@ export function initScene() {
   // ── KB + MIC buttons on the title bar ──
   const titleY = termWin.getTitleBarYOffset();
 
-  const kbBtnGeo = new THREE.PlaneGeometry(0.10, 0.035);
+  const kbBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const kbBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('KB', 32, '#ffffff', '#ff6b00', 128, 48),
-    transparent: false, depthWrite: true,
+    map: makeTextTexture('KB', 24, '#FF6B00', '#0c0c12', 96, 40),
+    transparent: true, depthWrite: true,
   });
   kbBtnMesh = new THREE.Mesh(kbBtnGeo, kbBtnMat);
-  kbBtnMesh.position.set(WIN_W / 2 - 0.065, titleY, 0.004);
+  kbBtnMesh.position.set(WIN_W / 2 - 0.045, titleY, 0.004);
   termWin.root.add(kbBtnMesh);
 
-  const micBtnGeo = new THREE.PlaneGeometry(0.10, 0.035);
+  const micBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const micBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('MIC', 28, '#ffffff', '#28c840', 128, 48),
-    transparent: false, depthWrite: true,
+    map: makeTextTexture('MIC', 22, '#28c840', '#0c0c12', 96, 40),
+    transparent: true, depthWrite: true,
   });
   micBtnMesh = new THREE.Mesh(micBtnGeo, micBtnMat);
-  micBtnMesh.position.set(WIN_W / 2 - 0.175, titleY, 0.004);
+  micBtnMesh.position.set(WIN_W / 2 - 0.115, titleY, 0.004);
   termWin.root.add(micBtnMesh);
   setMicBtnMesh(micBtnMesh);
 
