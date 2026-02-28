@@ -1,40 +1,40 @@
 // ─── TTS (ElevenLabs) — speak terminal responses ───
-// Calls Mistral API directly for clean text, then speaks via ElevenLabs
+// Captures Vibe's responses via API proxy, then speaks via ElevenLabs
 import { log } from './logging.js';
 
 let ttsSpeaking = false;
+let lastSeenTs = 0;  // timestamp of last response we already spoke
 
 /**
- * Ask Mistral for a short spoken reply, then speak it via ElevenLabs TTS.
- * Called from voice.js after the transcribed command is sent to terminal.
+ * Poll /api/latest-response until Vibe's response appears, then speak it.
+ * The web server's Mistral API proxy captures responses as Vibe streams them.
  */
-export async function speakReply(userText) {
+export async function speakReply() {
   if (ttsSpeaking) { log('[TTS] Already speaking, skip'); return; }
-  try {
-    log(`[TTS] Getting reply for: "${userText}"`);
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'mistral-small-latest',
-        messages: [
-          { role: 'system', content: 'You are a helpful coding assistant. Give a brief spoken reply (1-3 sentences). No markdown, no code blocks — just plain spoken text.' },
-          { role: 'user', content: userText },
-        ],
-        max_tokens: 200,
-        temperature: 0.7,
-      }),
-    });
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content?.trim();
-    if (!reply || reply.length < 3) { log(`[TTS] Empty reply, skipping`); return; }
+  const startTs = Date.now();
+  log('[TTS] Waiting for Vibe response via proxy...');
 
-    const ttsText = reply.length > 500 ? reply.substring(0, 500) + '...' : reply;
-    log(`[TTS] Speaking: "${ttsText.substring(0, 120)}"`);
-    speakTTS(ttsText);
-  } catch (e) {
-    log(`[TTS] Chat error: ${e.message}`);
+  // Poll for up to 30s, checking every 2s
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const res = await fetch('/api/latest-response');
+      const data = await res.json();
+      // New response arrived (timestamp is newer than what we last saw)
+      if (data.ts > lastSeenTs && data.text) {
+        lastSeenTs = data.ts;
+        const cleaned = cleanForSpeech(data.text);
+        if (cleaned.length < 3) { log(`[TTS] Only code/tools, skipping speech`); return; }
+        const ttsText = cleaned.length > 500 ? cleaned.substring(0, 500) + '...' : cleaned;
+        log(`[TTS] Got Vibe response (${data.text.length}→${cleaned.length} chars, ${((Date.now() - startTs) / 1000).toFixed(1)}s): "${ttsText.substring(0, 120)}"`);
+        speakTTS(ttsText);
+        return;
+      }
+    } catch (e) {
+      log(`[TTS] Poll error: ${e.message}`);
+    }
   }
+  log('[TTS] Timeout waiting for Vibe response');
 }
 
 // Keep these as no-ops so terminal.js import doesn't break
