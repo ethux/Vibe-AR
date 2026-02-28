@@ -1,53 +1,68 @@
 // ─── TTS (ElevenLabs) — speak terminal responses ───
-import { getTerm } from './state.js';
+// Captures Vibe's responses via API proxy, then speaks via ElevenLabs
 import { log } from './logging.js';
 
-let ttsCollecting = false;
-let ttsStartLine = 0;
-let ttsTimeout = null;
 let ttsSpeaking = false;
+let lastSeenTs = 0;  // timestamp of last response we already spoke
 
-export function enableTtsCollecting() {
-  const term = getTerm();
-  ttsStartLine = term ? term.buffer.active.baseY + term.buffer.active.cursorY : 0;
-  ttsCollecting = true;
-}
+/**
+ * Poll /api/latest-response until Vibe's response appears, then speak it.
+ * The web server's Mistral API proxy captures responses as Vibe streams them.
+ */
+export async function speakReply() {
+  if (ttsSpeaking) { log('[TTS] Already speaking, skip'); return; }
+  const startTs = Date.now();
+  log('[TTS] Waiting for Vibe response via proxy...');
 
-export function onTermOutput() {
-  if (!ttsCollecting) return;
-  clearTimeout(ttsTimeout);
-  ttsTimeout = setTimeout(() => finishTtsCollect(), 2000);
-}
-
-function finishTtsCollect() {
-  clearTimeout(ttsTimeout);
-  ttsCollecting = false;
-  const term = getTerm();
-  if (!term) return;
-
-  const buf = term.buffer.active;
-  const endLine = buf.baseY + buf.cursorY;
-  const lines = [];
-  for (let i = ttsStartLine + 1; i < endLine; i++) {
-    const line = buf.getLine(i);
-    if (!line) continue;
-    const text = line.translateToString(true).trim();
-    if (text) lines.push(text);
+  // Poll for up to 30s, checking every 2s
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const res = await fetch('/api/latest-response');
+      const data = await res.json();
+      // New response arrived (timestamp is newer than what we last saw)
+      if (data.ts > lastSeenTs && data.text) {
+        lastSeenTs = data.ts;
+        const cleaned = cleanForSpeech(data.text);
+        if (cleaned.length < 3) { log(`[TTS] Only code/tools, skipping speech`); return; }
+        const ttsText = cleaned.length > 500 ? cleaned.substring(0, 500) + '...' : cleaned;
+        log(`[TTS] Got Vibe response (${data.text.length}→${cleaned.length} chars, ${((Date.now() - startTs) / 1000).toFixed(1)}s): "${ttsText.substring(0, 120)}"`);
+        speakTTS(ttsText);
+        return;
+      }
+    } catch (e) {
+      log(`[TTS] Poll error: ${e.message}`);
+    }
   }
-
-  const filtered = lines.filter(l => {
-    if (/^(root@|vibe>|\$|#|>>>)\s*/i.test(l)) return false;
-    if (/^\[.*\]\s*$/.test(l)) return false;
-    return true;
-  });
-
-  const responseText = filtered.join(' ').trim();
-  if (responseText.length < 10) { log('[TTS] Response too short, skipping'); return; }
-
-  const ttsText = responseText.length > 500 ? responseText.substring(0, 500) + '...' : responseText;
-  log(`[TTS] Speaking ${ttsText.length} chars: "${ttsText.substring(0, 80)}..."`);
-  speakTTS(ttsText);
+  log('[TTS] Timeout waiting for Vibe response');
 }
+
+/** Strip code blocks, tool calls, and markdown — keep only spoken text */
+function cleanForSpeech(text) {
+  return text
+    // Remove fenced code blocks (```...```)
+    .replace(/```[\s\S]*?```/g, '')
+    // Remove inline code (`...`)
+    .replace(/`[^`]+`/g, '')
+    // Remove markdown headers (# ## ###)
+    .replace(/^#{1,6}\s+/gm, '')
+    // Remove markdown bold/italic
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+    // Remove markdown links [text](url) → text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove file paths (/foo/bar.js, ./src/thing.ts)
+    .replace(/(?:^|\s)[.\/][\w\/.-]+\.\w+/g, '')
+    // Remove tool call patterns (common in coding agents)
+    .replace(/^(Reading|Writing|Searching|Running|Executing|Created|Modified|Deleted)\s.*$/gm, '')
+    // Collapse whitespace
+    .replace(/\n{2,}/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Keep these as no-ops so terminal.js import doesn't break
+export function enableTtsCollecting() {}
+export function onTermOutput() {}
 
 // Streaming PCM playback
 const PCM_RATE = 24000;

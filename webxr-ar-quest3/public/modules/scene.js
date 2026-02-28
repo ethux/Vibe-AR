@@ -37,7 +37,7 @@ export function initScene() {
   // ── WindowManager + terminal window ──
   wm = new WindowManager(scene, renderer, camera);
   termWin = wm.createWindow({
-    title: 'MISTRAL VIBE',
+    title: 'VIBE AR',
     width: WIN_W,
     height: WIN_H,
     position: [0, 1.4, -0.7],
@@ -51,22 +51,22 @@ export function initScene() {
   // ── KB + MIC buttons on the title bar ──
   const titleY = termWin.getTitleBarYOffset();
 
-  const kbBtnGeo = new THREE.PlaneGeometry(0.10, 0.035);
+  const kbBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const kbBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('KB', 32, '#ffffff', '#ff6b00', 128, 48),
-    transparent: false, depthWrite: true,
+    map: makeTextTexture('KB', 24, '#FF7000', '#C0C0C0', 96, 40),
+    transparent: true, depthWrite: true,
   });
   kbBtnMesh = new THREE.Mesh(kbBtnGeo, kbBtnMat);
-  kbBtnMesh.position.set(WIN_W / 2 - 0.065, titleY, 0.004);
+  kbBtnMesh.position.set(WIN_W / 2 - 0.045, titleY, 0.004);
   termWin.root.add(kbBtnMesh);
 
-  const micBtnGeo = new THREE.PlaneGeometry(0.10, 0.035);
+  const micBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const micBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('MIC', 28, '#ffffff', '#28c840', 128, 48),
-    transparent: false, depthWrite: true,
+    map: makeTextTexture('MIC', 22, '#28c840', '#C0C0C0', 96, 40),
+    transparent: true, depthWrite: true,
   });
   micBtnMesh = new THREE.Mesh(micBtnGeo, micBtnMat);
-  micBtnMesh.position.set(WIN_W / 2 - 0.175, titleY, 0.004);
+  micBtnMesh.position.set(WIN_W / 2 - 0.115, titleY, 0.004);
   termWin.root.add(micBtnMesh);
   setMicBtnMesh(micBtnMesh);
 
@@ -80,7 +80,7 @@ export function initScene() {
 
   function addRay(c) {
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-3)]);
-    c.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xff6b00 })));
+    c.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xFF7000 })));
   }
   addRay(ctrl0); addRay(ctrl1);
 

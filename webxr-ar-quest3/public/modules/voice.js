@@ -2,7 +2,7 @@
 import { getTermWs, getTerm } from './state.js';
 import { log } from './logging.js';
 import { makeTextTexture } from './textures.js';
-import { enableTtsCollecting } from './tts.js';
+import { speakReply } from './tts.js';
 
 let isRecording = false;
 let mediaRecorder = null;
@@ -18,7 +18,12 @@ async function transcribeAndSend(blob, mime) {
     log('[STT] Transcribing...');
     if (cmdInput) cmdInput.placeholder = 'Transcribing...';
     const ab = await blob.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
+    const bytes = new Uint8Array(ab);
+    let b64 = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    b64 = btoa(b64);
     const res = await fetch('/api/transcribe', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: b64, mimeType: mime }),
@@ -32,7 +37,7 @@ async function transcribeAndSend(blob, mime) {
         termWs.send(new TextEncoder().encode('0' + text.trim() + '\r'));
         log(`[STT] Sent: "${text.trim()}"`);
         if (cmdInput) cmdInput.value = '';
-        enableTtsCollecting();
+        speakReply();
       }
     } else {
       if (cmdInput) cmdInput.placeholder = 'No speech detected';
@@ -52,8 +57,8 @@ export function toggleMicFromBtn() {
 function updateMicBtnVisual() {
   if (!micBtnMesh) return;
   micBtnMesh.material.map = isRecording
-    ? makeTextTexture('REC', 28, '#ffffff', '#ff2020', 128, 48)
-    : makeTextTexture('MIC', 28, '#ffffff', '#28c840', 128, 48);
+    ? makeTextTexture('REC', 22, '#ff2020', '#0c0c12', 96, 40)
+    : makeTextTexture('MIC', 22, '#28c840', '#0c0c12', 96, 40);
   micBtnMesh.material.needsUpdate = true;
 }
 
