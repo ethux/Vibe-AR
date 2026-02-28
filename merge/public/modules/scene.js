@@ -11,7 +11,7 @@ import { makeTextTexture } from './textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
+import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist, detectPointing } from './hand-tracking.js';
 import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
@@ -266,52 +266,36 @@ export function initScene() {
           }
 
           if (handedness === 'right') {
-            const palmResult = htDetectPalmOpen(src, frame, ref, handedness, renderer);
-            s.palmOpen = palmResult.open;
+            const isPointing = detectPointing(src, frame, ref);
             const anim = handAnimState[handIdx];
 
-            // Palm just opened → spawn mascot + start recording
-            if (s.palmOpen && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            // Index just raised → spawn mascot + start recording
+            if (isPointing && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
               s.lastGestureTime = now;
-              // Spawn mascot above palm
               if (anim.active) { anim.active.kill(); anim.active = null; }
-              const spawnPos = palmResult.palmCenter
-                ? palmResult.palmCenter.clone()
-                : new THREE.Vector3(0, 1.4, -0.5);
+              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+              const spawnPos = indexTip ? indexTip.clone() : new THREE.Vector3(0, 1.4, -0.5);
               spawnPos.y += 0.08;
               anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'idle' });
-              log(`[HAND] right palm OPENED — mascot spawned, starting recording`);
-              // Start recording
-              if (!getIsRecording()) {
-                startRecording();
-              }
+              log('[HAND] right index pointed — recording started');
+              if (!getIsRecording()) startRecording();
             }
 
-            // While palm open, follow hand (always orange)
-            if (s.palmOpen && anim.active && palmResult.palmCenter) {
-              const followPos = palmResult.palmCenter.clone();
-              followPos.y += 0.08;
-              anim.active.moveTo(followPos);
+            // While pointing, mascot follows index tip
+            if (isPointing && anim.active) {
+              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+              if (indexTip) { const p = indexTip.clone(); p.y += 0.08; anim.active.moveTo(p); }
             }
 
-            // Palm closed (any reason) → hide mascot + stop recording or TTS
-            if (!s.palmOpen && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            // Index lowered → hide mascot + stop recording/TTS
+            if (!isPointing && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
               s.lastGestureTime = now;
-              // Hide mascot
-              if (anim.active) {
-                anim.active.fastHide(0.08);
-                anim.active = null;
-              }
-              if (getIsRecording()) {
-                log(`[HAND] right palm CLOSED — stopping recording`);
-                stopRecording();
-              }
-              // Always kill TTS on palm close (cancels polling + playback)
-              log(`[HAND] right palm CLOSED — stopping TTS`);
+              if (anim.active) { anim.active.fastHide(0.08); anim.active = null; }
+              if (getIsRecording()) { log('[HAND] right index folded — recording stopped'); stopRecording(); }
               stopTTS();
             }
 
-            anim.wasOpen = s.palmOpen;
+            anim.wasOpen = isPointing;
           }
 
           // ── Fist detection → CodeCity grab interaction ──

@@ -91,4 +91,25 @@ function detectFist(inputSource, frame, refSpace) {
   return { fisting: curled >= 3, wristPos: wrist };
 }
 
-export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist };
+function detectPointing(inputSource, frame, refSpace) {
+  const wrist      = getJointPos(inputSource, 'wrist', frame, refSpace);
+  const indexTip   = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  const indexProx  = getJointPos(inputSource, 'index-finger-phalanx-proximal', frame, refSpace);
+  const middleTip  = getJointPos(inputSource, 'middle-finger-tip', frame, refSpace);
+  const middleProx = getJointPos(inputSource, 'middle-finger-phalanx-proximal', frame, refSpace);
+  const ringTip    = getJointPos(inputSource, 'ring-finger-tip', frame, refSpace);
+  const ringProx   = getJointPos(inputSource, 'ring-finger-phalanx-proximal', frame, refSpace);
+  const pinkyTip   = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
+  const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
+  const thumbTip   = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
+  if (!wrist || !indexTip || !indexProx || !middleTip || !ringTip || !pinkyTip)
+    return false;
+  const indexExtended = indexTip.distanceTo(wrist) > indexProx.distanceTo(wrist) * 1.1;
+  const middleCurled  = middleProx ? middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 1.05 : true;
+  const ringCurled    = ringProx   ? ringTip.distanceTo(wrist)   < ringProx.distanceTo(wrist)   * 1.05 : true;
+  const pinkyCurled   = pinkyProx  ? pinkyTip.distanceTo(wrist)  < pinkyProx.distanceTo(wrist)  * 1.05 : true;
+  const notPinching   = thumbTip   ? thumbTip.distanceTo(indexTip) > 0.03 : true;
+  return indexExtended && middleCurled && ringCurled && pinkyCurled && notPinching;
+}
+
+export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist, detectPointing };
