@@ -37,6 +37,17 @@ renderer.shadowMap.enabled = true;
 // ══════════════════════════════════════════════
 const wm = new WindowManager(scene, renderer, camera);
 
+// ══════════════════════════════════════════════
+//  ANIMATION MANAGER — canvas-driven animations
+// ══════════════════════════════════════════════
+const animMgr = new AnimationManager(scene);
+
+// Track per-hand animation state
+const handAnimState = [
+  { active: null, wasOpen: false },  // left
+  { active: null, wasOpen: false },  // right
+];
+
 // Create the demo window with pixel-art Mistral-orange borders
 const mainWindow = wm.createWindow({
   title:    'VIBE AR',
@@ -211,18 +222,21 @@ const handStates = [
   { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, handedness: 'right' }
 ];
 
-// Joint visual material
+// Joint visual material (hidden — dots disabled)
 const jointMat = new THREE.MeshStandardMaterial({
   color: 0x8888ff, roughness: 0.3, metalness: 0.2,
-  transparent: true, opacity: 0.6
+  transparent: true, opacity: 0.0,
+  visible: false
 });
 const jointGeo = new THREE.SphereGeometry(0.005, 8, 8);
 
 // Debug indicator — a small sphere that turns green when hands are detected
+// Debug sphere (hidden)
 const debugGeo = new THREE.SphereGeometry(0.015, 16, 16);
 const debugMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
 const debugSphere = new THREE.Mesh(debugGeo, debugMat);
 debugSphere.position.set(0.25, 1.5, -0.8);
+debugSphere.visible = false;
 scene.add(debugSphere);
 
 // Create bubble for each hand
@@ -441,15 +455,14 @@ renderer.setAnimationLoop((timestamp, frame) => {
           console.log('✋ Hand tracking active!', inputSource.handedness);
         }
 
-        // Update joint visuals
+        // Update joint positions (dots hidden)
         HAND_JOINTS.forEach((jointName, j) => {
           const pos = getJointPos(inputSource, jointName, frame, refSpace);
           const mesh = state.jointMeshes[j];
           if (pos) {
             mesh.position.copy(pos);
-            mesh.visible = true;
-            const isTip = jointName.endsWith('-tip');
-            mesh.scale.setScalar(isTip ? 1.4 : 1.0);
+            // Dots hidden — only track positions for gesture detection
+            mesh.visible = false;
           } else {
             mesh.visible = false;
           }
@@ -467,53 +480,45 @@ renderer.setAnimationLoop((timestamp, frame) => {
         const targetSmooth = state.palmOpen ? 1 : 0;
         state.palmOpenSmooth += (targetSmooth - state.palmOpenSmooth) * 0.12;
 
+        // Bubble hidden — mascot character replaces it on right hand
         const bubble = state.bubble;
-        if (palmResult.palmCenter) {
-          const bubbleTarget = palmResult.palmCenter.clone();
-          bubbleTarget.y += 0.06 + Math.sin(elapsed * 2.5) * 0.008;
-          bubble.position.lerp(bubbleTarget, 0.3);
+        bubble.visible = false;
+        bubble.scale.set(0, 0, 0);
+
+        // ── Right hand palm open → mascot animation ──
+        if (state.handedness === 'right') {
+          const anim = handAnimState[1];
+
+          if (state.palmOpen && !anim.wasOpen) {
+            // Palm just opened — spawn mascot (SVG anim plays once, then holds)
+            if (anim.active) { anim.active.kill(); anim.active = null; }
+            const spawnPos = palmResult.palmCenter
+              ? palmResult.palmCenter.clone()
+              : bubble.position.clone();
+            spawnPos.y += 0.08;
+            anim.active = animMgr.play('mascot-bounce', spawnPos);
+          }
+
+          // While palm open, keep following hand
+          if (state.palmOpen && anim.active && palmResult.palmCenter) {
+            const followPos = palmResult.palmCenter.clone();
+            followPos.y += 0.08;
+            anim.active.moveTo(followPos);
+          }
+
+          // Palm closed → fast hide
+          if (!state.palmOpen && anim.wasOpen && anim.active) {
+            anim.active.fastHide(0.08);
+            anim.active = null;
+          }
+
+          anim.wasOpen = state.palmOpen;
         }
 
-        if (state.palmOpenSmooth > 0.05) {
-          bubble.visible = true;
-          const s = state.palmOpenSmooth;
-          bubble.scale.set(s, s, s);
-
-          const sparkles = bubble.userData.sparkles;
-          sparkles.forEach((spark, i) => {
-            const angle = elapsed * (1.5 + i * 0.3) + i * (Math.PI * 2 / sparkles.length);
-            const radius = 0.035 + Math.sin(elapsed * 2 + i) * 0.008;
-            spark.position.set(
-              Math.cos(angle) * radius,
-              Math.sin(elapsed * 3 + i * 1.2) * 0.015,
-              Math.sin(angle) * radius
-            );
-            spark.material.opacity = 0.5 + Math.sin(elapsed * 4 + i) * 0.3;
-          });
-
-          const core = bubble.userData.coreMesh;
-          core.material.opacity = 0.5 + Math.sin(elapsed * 3) * 0.2;
-          const cs = 0.9 + Math.sin(elapsed * 2.5) * 0.1;
-          core.scale.set(cs, cs, cs);
-
-          const halo = bubble.userData.haloMesh;
-          halo.material.opacity = 0.1 + state.palmOpenSmooth * 0.1;
-
-          bubble.rotation.y += dt * 0.5;
-
-          state.jointMeshes.forEach(m => {
-            if (!m.material.emissive) m.material.emissive = new THREE.Color();
-            m.material.emissive.setHex(0x4466ff);
-            m.material.emissiveIntensity = state.palmOpenSmooth * 0.5;
-          });
-        } else {
-          bubble.visible = false;
-          bubble.scale.set(0, 0, 0);
-          state.jointMeshes.forEach(m => {
-            if (m.material.emissiveIntensity !== undefined) {
-              m.material.emissiveIntensity = 0;
-            }
-          });
+        // Left hand — placeholder for future animations
+        if (state.handedness === 'left') {
+          const anim = handAnimState[0];
+          anim.wasOpen = state.palmOpen;
         }
 
         // ── Hand pinch → route to WindowManager ──
@@ -540,6 +545,10 @@ renderer.setAnimationLoop((timestamp, frame) => {
       });
     }
   }
+
+  // ── Update animations ──
+  const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  animMgr.update(dt, elapsed, xrCamera);
 
   renderer.render(scene, camera);
 });
