@@ -263,14 +263,22 @@ export function initScene() {
                 if (bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
               } else {
                 // Right hand: grab-drag to open (pull toward self) or go back (push away)
-                const grabbed = bubbleMgr.findClosestFreeBubble(p.pinchPoint);
+                // First try proximity (12cm), then ray from wrist through pinch point
+                let grabbed = bubbleMgr.findClosestFreeBubble(p.pinchPoint);
+                if (!grabbed) {
+                  const wristPos = getJointPos(src, 'wrist', frame, ref);
+                  if (wristPos) {
+                    const rayDir = p.pinchPoint.clone().sub(wristPos);
+                    grabbed = bubbleMgr.findBubbleByRay(p.pinchPoint, rayDir);
+                  }
+                }
                 if (grabbed) {
                   _draggedBubble = grabbed;
                   _dragStartPinchZ = p.pinchPoint.z;
                   _dragOriginalPos.copy(grabbed.position);
-                  grabbed.userData.scaleTarget = 1.15; // slight grow feedback
+                  grabbed.userData.scaleTarget = 1.15;
                   _backSwipeActive = false;
-                  continue; // don't fall through to window
+                  continue;
                 }
                 // Right pinch in empty space → start back-swipe tracking
                 _backSwipeActive = true;
