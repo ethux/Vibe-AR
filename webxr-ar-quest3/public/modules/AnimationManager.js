@@ -248,33 +248,13 @@ function drawMascot(ctx, t, canvasSize, mode) {
   ctx.clip();
 
   // SVG color bands: top 60/140, mid 40/140, bottom 40/140
-  // Colors change based on mode
-  if (mode === 'recording') {
-    // Red pulsing for recording
-    const pulse = 0.7 + 0.3 * Math.sin(t * 20);
-    ctx.fillStyle = `rgba(255,${Math.floor(40*pulse)},${Math.floor(40*pulse)},1)`;
-    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
-    ctx.fillStyle = `rgba(200,${Math.floor(20*pulse)},${Math.floor(20*pulse)},1)`;
-    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
-    ctx.fillStyle = `rgba(150,${Math.floor(10*pulse)},${Math.floor(10*pulse)},1)`;
-    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
-  } else if (mode === 'listening') {
-    // Blue for TTS speaking
-    ctx.fillStyle = '#3B82F6';
-    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
-    ctx.fillStyle = '#2563EB';
-    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
-    ctx.fillStyle = '#1D4ED8';
-    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
-  } else {
-    // Default orange
-    ctx.fillStyle = '#FF9900';
-    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
-    ctx.fillStyle = '#FF6600';
-    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
-    ctx.fillStyle = '#FF3300';
-    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
-  }
+  // Always orange
+  ctx.fillStyle = '#FF9900';
+  ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
+  ctx.fillStyle = '#FF6600';
+  ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
+  ctx.fillStyle = '#FF3300';
+  ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
 
   ctx.restore();
 
@@ -309,23 +289,7 @@ function drawMascot(ctx, t, canvasSize, mode) {
 
   ctx.restore();
 
-  // ── Status text below character ──
-  if (mode === 'recording') {
-    ctx.save();
-    ctx.fillStyle = '#FF3333';
-    ctx.font = `bold ${Math.floor(S * 0.06)}px monospace`;
-    ctx.textAlign = 'center';
-    const blink = Math.sin(Date.now() * 0.008) > 0;
-    if (blink) ctx.fillText('● REC', S / 2, S * 0.78 + S * 0.08);
-    ctx.restore();
-  } else if (mode === 'listening') {
-    ctx.save();
-    ctx.fillStyle = '#3B82F6';
-    ctx.font = `bold ${Math.floor(S * 0.05)}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText('♪ SPEAKING', S / 2, S * 0.78 + S * 0.08);
-    ctx.restore();
-  }
+
 }
 
 
@@ -437,11 +401,7 @@ class AnimationManager {
       // Redraw canvas — loop for recording/listening, clamp for idle
       let t = inst.time / inst.duration;
       if (t > 1.0) {
-        if (inst.mode === 'recording' || inst.mode === 'listening') {
-          t = t % 1.0;  // loop the bounce
-        } else {
-          t = 1.0;  // hold last frame
-        }
+        t = t % 1.0;  // always loop the bounce
       }
       drawMascot(inst.ctx, t, inst.res, inst.mode);
       inst.texture.needsUpdate = true;
