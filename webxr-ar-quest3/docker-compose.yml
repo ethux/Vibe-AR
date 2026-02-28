@@ -13,6 +13,7 @@ services:
       dockerfile: Dockerfile.web
     ports:
       - "3000:3000"
+      - "3001:3001"
     volumes:
       - ./public:/app/public
       - ./certs:/app/certs:ro

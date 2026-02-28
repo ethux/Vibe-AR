@@ -6,128 +6,159 @@
   <title>Mistral Vibe AR</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      background: #0a0a0a;
-      color: #e0e0e0;
-      overflow: hidden;
-    }
+    body { overflow: hidden; background: #0a0a0a; font-family: 'SF Mono', monospace; color: #e0e0e0; }
 
-    #xr-canvas {
+    /* xterm container — needs real size for xterm to calculate cols/rows, but invisible */
+    #xterm-container {
       position: fixed; top: 0; left: 0;
-      width: 100%; height: 100%; z-index: 0;
+      width: 1024px; height: 768px;
+      clip-path: inset(100%);
     }
 
-    #vibe-window {
-      position: fixed;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      width: 900px; max-width: 95vw;
-      height: 620px; max-height: 88vh;
-      background: rgba(12, 12, 18, 0.97);
-      border: 1px solid #2a2a3a;
-      border-radius: 12px;
+    /* Overlay with Enter AR button */
+    #overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 10; gap: 16px;
+      background: rgba(10, 10, 10, 0.9);
+    }
+    #overlay.hidden { display: none; }
+    #overlay h1 { color: #ff6b00; font-size: 28px; }
+    #overlay p { color: #888; font-size: 14px; max-width: 400px; text-align: center; }
+
+    #btn-enter-ar {
+      padding: 20px 48px; font-size: 22px; font-weight: 800;
+      background: #ff6b00; color: #fff; border: none;
+      border-radius: 12px; cursor: pointer;
+      text-transform: uppercase; letter-spacing: 2px;
+      touch-action: manipulation;
+      min-width: 200px; min-height: 64px;
+      transition: all 0.15s;
+    }
+    #btn-enter-ar:hover { background: #e05500; }
+    #btn-enter-ar:active { transform: scale(0.95); }
+    #btn-enter-ar:disabled { background: #555; cursor: not-allowed; }
+    #btn-enter-ar.loading { background: #febc2e; color: #000; }
+
+    #status { color: #888; font-size: 13px; }
+
+    /* Command input bar */
+    #cmd-bar {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      display: flex; gap: 8px; padding: 8px 12px;
+      background: rgba(20, 20, 30, 0.95);
+      border-top: 1px solid #ff6b00;
       z-index: 20;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 40px rgba(255,107,0,0.05);
     }
+    #cmd-input {
+      flex: 1; padding: 10px 14px; font-size: 16px;
+      font-family: 'SF Mono', 'Courier New', monospace;
+      background: #1a1a2e; color: #e0e0e0;
+      border: 1px solid #333; border-radius: 8px;
+      outline: none;
+    }
+    #cmd-input:focus { border-color: #ff6b00; }
+    #cmd-send {
+      padding: 10px 20px; font-size: 16px; font-weight: 700;
+      background: #ff6b00; color: #fff; border: none;
+      border-radius: 8px; cursor: pointer;
+      touch-action: manipulation;
+    }
+    #cmd-mic {
+      padding: 10px 16px; font-size: 20px; font-weight: 700;
+      background: #1a1a2e; color: #e0e0e0; border: 1px solid #333;
+      border-radius: 8px; cursor: pointer;
+      touch-action: manipulation; transition: all 0.15s;
+    }
+    #cmd-mic.recording { background: #ff2020; color: #fff; border-color: #ff2020; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
-    #vibe-titlebar {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 16px;
-      background: rgba(20, 20, 30, 0.9);
-      border-bottom: 1px solid #1e1e2e;
-      border-radius: 12px 12px 0 0;
+    #debug-log {
+      position: fixed; bottom: 52px; left: 0; right: 0;
+      max-height: 120px; overflow-y: auto;
+      padding: 4px 8px; font-size: 10px; color: #555;
+      background: rgba(0,0,0,0.8); z-index: 100;
+      white-space: pre-wrap; font-family: monospace;
     }
-    .dots { display: flex; gap: 6px; }
-    .dot { width: 12px; height: 12px; border-radius: 50%; }
-    .dot.red { background: #ff5f57; }
-    .dot.yellow { background: #febc2e; }
-    .dot.green { background: #28c840; }
-    .title { flex: 1; text-align: center; font-size: 13px; color: #666; }
-    .title span { color: #ff6b00; font-weight: 600; }
+    /* DOM overlay root — full-screen, transparent, passes clicks through */
+    #dom-overlay-root {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 15;
+      background: transparent;
+      pointer-events: none;
+      display: flex; flex-direction: column; justify-content: flex-end;
+    }
+    #dom-overlay-root * { pointer-events: auto; }
 
-    #vibe-status {
-      padding: 6px 16px;
-      background: rgba(15, 15, 22, 0.8);
-      border-bottom: 1px solid #1a1a2a;
-      font-size: 12px; color: #888;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .indicator { width: 8px; height: 8px; border-radius: 50%; background: #28c840; }
-    .indicator.connecting { background: #febc2e; animation: pulse-dot 1s infinite; }
-    .indicator.error { background: #ff5f57; }
-    @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    /* Hide non-essential UI when AR is active (keep xterm alive for buffer!) */
+    body.ar-active #overlay,
+    body.ar-active #debug-log { display: none !important; }
 
-    #terminal-frame {
-      flex: 1; border: none; width: 100%;
-      background: #0c0c12;
+    /* cmd-bar hidden by default in AR, shown when keyboard button tapped */
+    body.ar-active #cmd-bar { display: none; }
+    body.ar-active #cmd-bar.visible {
+      display: flex;
+      padding: 14px 16px;
+      background: rgba(10, 10, 20, 0.95);
+      border-top: 2px solid #ff6b00;
     }
-
-    #controls {
-      display: flex; align-items: center; gap: 8px;
-      padding: 8px 16px;
-      border-top: 1px solid #1e1e2e;
-      background: rgba(15, 15, 22, 0.9);
-      border-radius: 0 0 12px 12px;
+    body.ar-active #cmd-bar.visible #cmd-input {
+      font-size: 20px; padding: 16px 18px;
+      min-height: 56px;
     }
-    button {
-      padding: 6px 14px; border-radius: 6px;
-      border: 1px solid #333; background: transparent;
-      color: #888; font-size: 12px; cursor: pointer;
-      font-family: inherit; transition: all 0.2s;
+    body.ar-active #cmd-bar.visible #cmd-send {
+      font-size: 20px; padding: 16px 28px;
+      min-height: 56px;
     }
-    button:hover { border-color: #ff6b00; color: #ff6b00; }
-    #btn-mic {
-      width: 36px; height: 36px; border-radius: 50%;
-      font-size: 16px; padding: 0;
-      display: flex; align-items: center; justify-content: center;
+    body.ar-active #cmd-bar.visible #cmd-mic {
+      font-size: 28px; padding: 16px 20px;
+      min-height: 56px;
     }
-    #btn-mic.recording {
-      border-color: #ff4444; color: #ff4444;
-      background: rgba(255,68,68,0.1);
-      animation: pulse-btn 1s infinite;
-    }
-    @keyframes pulse-btn { 0%,100% { transform:scale(1); } 50% { transform:scale(1.08); } }
-    .spacer { flex: 1; }
-    #status-msg { font-size: 11px; color: #555; }
   </style>
+  <!-- xterm.js -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 </head>
 <body>
-  <canvas id="xr-canvas"></canvas>
+  <div id="xterm-container"></div>
 
-  <div id="vibe-window">
-    <div id="vibe-titlebar">
-      <div class="dots">
-        <div class="dot red"></div>
-        <div class="dot yellow"></div>
-        <div class="dot green"></div>
-      </div>
-      <div class="title"><span>mistral vibe</span> &mdash; AR terminal</div>
-    </div>
-    <div id="vibe-status">
-      <div class="indicator connecting" id="status-dot"></div>
-      <span id="status-text">Connecting to vibe...</span>
-      <span class="spacer"></span>
-      <span id="status-msg"></span>
-    </div>
-    <iframe id="terminal-frame" src="about:blank"></iframe>
-    <div id="controls">
-      <button id="btn-ar">Start AR</button>
-      <button id="btn-mic">&#x1F3A4;</button>
-      <span class="spacer"></span>
-      <button id="btn-reload">Reload Terminal</button>
+  <div id="overlay">
+    <h1>Mistral Vibe AR</h1>
+    <p>Floating terminal in augmented reality</p>
+    <button id="btn-enter-ar">START AR</button>
+    <div id="status">Initializing...</div>
+  </div>
+
+  <!-- DOM overlay root: visible & interactive during immersive AR on Quest 3 -->
+  <div id="dom-overlay-root">
+    <div id="cmd-bar">
+      <input id="cmd-input" type="text" placeholder="Type command..."
+             autocomplete="off" autocapitalize="off" spellcheck="false"
+             inputmode="text" enterkeyhint="send">
+      <button id="cmd-mic" title="Tap to record voice"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="1" width="6" height="11" rx="3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
+      <button id="cmd-send">Send</button>
     </div>
   </div>
 
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  <pre id="debug-log"></pre>
+
+  <!-- IWER: WebXR emulator for desktop testing (skipped on Quest) -->
+  <script type="module">
+    const isQuest = /OculusBrowser|Quest/i.test(navigator.userAgent);
+    if (!isQuest) {
+      try {
+        const { XRDevice, metaQuest3 } = await import('https://cdn.jsdelivr.net/npm/iwer@0.5.1/+esm');
+        const xrDevice = new XRDevice(metaQuest3);
+        xrDevice.installRuntime();
+        console.log('[IWER] XR emulator installed');
+      } catch (e) {
+        console.warn('[IWER] Failed to load emulator:', e);
+      }
     }
-  }
   </script>
-  <script type="module" src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script type="module" src="app.js?v=13"></script>
 </body>
 </html>
