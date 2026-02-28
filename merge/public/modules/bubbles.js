@@ -125,6 +125,12 @@ class FileBubbleManager {
       { name: 'package.json', type: 'file', ext: 'json' },
     ];
 
+    // Files/folders that add visual noise without useful info
+    const NOISE = new Set([
+      'node_modules', '.git', '.DS_Store', 'dist', 'build',
+      '.next', '.nuxt', '__pycache__', '.venv', 'venv', '.idea',
+    ]);
+
     let entries;
     try {
       const res = await fetch('/api/companion/files/list?path=' + encodeURIComponent(dirPath));
@@ -134,10 +140,8 @@ class FileBubbleManager {
       entries = FALLBACK;
     }
 
-    // Prepend ".." back bubble when not at root
-    if (dirPath !== '.') {
-      entries = [{ name: '..', type: 'folder', _isBack: true }, ...entries];
-    }
+    // Filter out noisy/binary entries; keep useful dotfiles (.env, .gitignore…)
+    entries = entries.filter(e => !NOISE.has(e.name));
 
     entries.forEach((e, i) => {
       const b = this._createBubble(e, i, entries.length);
@@ -214,9 +218,9 @@ class FileBubbleManager {
   // ── Diff application — animate in new, animate out removed ──
 
   _applyDiff(allEntries, added, removed) {
-    // Remove bubbles for deleted files
+    // Remove bubbles for deleted files — never touch palm (context) bubbles
     for (const r of removed) {
-      const idx = this.fileBubbles.findIndex(b => b.userData.fileData?.name === r.name);
+      const idx = this.fileBubbles.findIndex(b => !b.userData.inPalm && b.userData.fileData?.name === r.name);
       if (idx !== -1) {
         const bubble = this.fileBubbles[idx];
         this.fileBubbles.splice(idx, 1);
@@ -240,7 +244,8 @@ class FileBubbleManager {
   _relayout(entries) {
     const total = entries.length;
     for (let i = 0; i < entries.length; i++) {
-      const bubble = this.fileBubbles.find(b => b.userData.fileData?.name === entries[i].name);
+      // Skip palm (context) bubbles — they orbit the palm, not the arc
+      const bubble = this.fileBubbles.find(b => !b.userData.inPalm && b.userData.fileData?.name === entries[i].name);
       if (!bubble) continue;
       const angle = (i / total) * Math.PI * 1.6 - Math.PI * 0.8;
       const radius = 0.7 + (i % 3) * 0.12;
@@ -258,11 +263,24 @@ class FileBubbleManager {
   // ── Bubble lifecycle ──
 
   _removeAllBubbles() {
-    this.fileBubbles.forEach(b => this._destroyBubble(b));
-    this.fileBubbles.length = 0;
-    this.palmBubbles.length = 0;
-    this._spawning.length = 0;
+    // Flush _removing — destroy orphaned sprites immediately to avoid ghost objects
+    for (const r of this._removing) {
+      if (!r.bubble.userData.inPalm) this._destroyBubble(r.bubble);
+    }
     this._removing.length = 0;
+
+    // Keep spawning entries only for palm bubbles (they may still be fading in)
+    this._spawning = this._spawning.filter(s => s.bubble.userData.inPalm);
+
+    // Destroy free bubbles in-place — palm (context) bubbles survive navigation
+    for (let i = this.fileBubbles.length - 1; i >= 0; i--) {
+      const b = this.fileBubbles[i];
+      if (!b.userData.inPalm) {
+        this._destroyBubble(b);
+        this.fileBubbles.splice(i, 1);
+      }
+    }
+    // palmBubbles keeps its references — orbit continues across folders
   }
 
   _destroyBubble(b) {
@@ -388,13 +406,14 @@ class FileBubbleManager {
           ud._moveT = 0;
         }
       }
-      // Smooth move to target position (when relayout happens)
+      // Smooth move to target position (relayout or return from palm)
       else if (ud.targetPos) {
-        b.position.x += (ud.targetPos.x - b.position.x) * Math.min(1, dt * 5);
-        b.position.z += (ud.targetPos.z - b.position.z) * Math.min(1, dt * 5);
-        ud.basePos.x = b.position.x;
-        ud.basePos.z = b.position.z;
-        if (Math.abs(b.position.x - ud.targetPos.x) < 0.001) {
+        const k = Math.min(1, dt * 5);
+        b.position.x += (ud.targetPos.x - b.position.x) * k;
+        b.position.y += (ud.targetPos.y - b.position.y) * k;
+        b.position.z += (ud.targetPos.z - b.position.z) * k;
+        ud.basePos.copy(b.position);
+        if (b.position.distanceTo(ud.targetPos) < 0.002) {
           ud.basePos.copy(ud.targetPos);
           ud.targetPos = null;
         }
@@ -535,6 +554,8 @@ class FileBubbleManager {
     if (pc) {
       pc.userData.inPalm = false;
       pc.userData.scaleTarget = 1;
+      // Animate back to original arc position (smooth fly-back)
+      pc.userData.targetPos = pc.userData.basePos.clone();
       pc.userData.restPos.copy(pc.userData.basePos);
       pc.visible = true;
       if (this.openedBubble === pc) this.openedBubble = null;
@@ -598,13 +619,7 @@ class FileBubbleManager {
     if (!fd) return;
 
     if (fd.type === 'folder') {
-      if (fd._isBack || fd.name === '..') {
-        const parts = this.currentPath.split('/');
-        parts.pop();
-        this.loadFiles(parts.length ? parts.join('/') : '.');
-      } else {
-        this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
-      }
+      this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
       return;
     }
 
