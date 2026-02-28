@@ -10,6 +10,7 @@ import chatRoutes from './routes/chat.js';
 import transcribeRoutes from './routes/transcribe.js';
 import ttsRoutes from './routes/tts.js';
 import debugRoutes from './routes/debug.js';
+import mistralProxyRoutes from './routes/mistral-proxy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -36,6 +37,7 @@ app.use(chatRoutes);
 app.use(transcribeRoutes);
 app.use(ttsRoutes);
 app.use(debugRoutes);
+app.use(mistralProxyRoutes);
 
 // Catch-all error logging
 app.use((err, req, res, next) => {
