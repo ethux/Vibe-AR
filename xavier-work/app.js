@@ -42,6 +42,50 @@ const wm = new WindowManager(scene, renderer, camera);
 // ══════════════════════════════════════════════
 const animMgr = new AnimationManager(scene);
 
+// ══════════════════════════════════════════════
+//  CODE CITY — 3D code visualization
+// ══════════════════════════════════════════════
+const codeCity = new CodeCityRenderer(scene, camera, wm);
+
+// Demo: analyze sample code on startup
+const DEMO_CODE = `class Calculator:
+    """A simple calculator class."""
+
+    def __init__(self):
+        self.history = []
+
+    def add(self, a, b):
+        result = a + b
+        self.history.append(('add', a, b, result))
+        return result
+
+    def subtract(self, a, b):
+        result = a - b
+        self.history.append(('sub', a, b, result))
+        return result
+
+    def multiply(self, a, b):
+        result = a * b
+        self.history.append(('mul', a, b, result))
+        return result
+
+    def get_history(self):
+        return self.history
+
+def main():
+    calc = Calculator()
+    print(calc.add(2, 3))
+    print(calc.subtract(10, 4))
+    print(calc.multiply(5, 6))
+    print(calc.get_history())
+
+if __name__ == "__main__":
+    main()`;
+
+codeCity.analyzeCode(DEMO_CODE, 'python', 'calculator.py')
+  .then(layout => { if (layout) console.log('Code City loaded:', layout.cityName); })
+  .catch(err => console.warn('Code City demo skipped:', err.message));
+
 // Track per-hand animation state
 const handAnimState = [
   { active: null, wasOpen: false },  // left
@@ -218,8 +262,8 @@ const HAND_JOINTS = [
 
 let hand0, hand1;
 const handStates = [
-  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, handedness: 'left' },
-  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, handedness: 'right' }
+  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, grabbing: false, handedness: 'left' },
+  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, grabbing: false, handedness: 'right' }
 ];
 
 // Joint visual material (hidden — dots disabled)
@@ -406,6 +450,42 @@ function detectPalmOpen(inputSource, frame, refSpace, handedness) {
   return { open: isOpen, palmCenter };
 }
 
+function detectGrab(inputSource, frame, refSpace) {
+  const wrist     = getJointPos(inputSource, 'wrist', frame, refSpace);
+  const thumbTip  = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
+  const indexTip  = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  const middleTip = getJointPos(inputSource, 'middle-finger-tip', frame, refSpace);
+  const ringTip   = getJointPos(inputSource, 'ring-finger-tip', frame, refSpace);
+  const pinkyTip  = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
+
+  const thumbProx  = getJointPos(inputSource, 'thumb-phalanx-proximal', frame, refSpace);
+  const indexProx  = getJointPos(inputSource, 'index-finger-phalanx-proximal', frame, refSpace);
+  const middleProx = getJointPos(inputSource, 'middle-finger-phalanx-proximal', frame, refSpace);
+  const ringProx   = getJointPos(inputSource, 'ring-finger-phalanx-proximal', frame, refSpace);
+  const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
+
+  if (!wrist || !thumbTip || !indexTip || !middleTip || !ringTip || !pinkyTip
+      || !thumbProx || !indexProx || !middleProx || !ringProx || !pinkyProx) {
+    return { grabbing: false, grabCenter: null };
+  }
+
+  // Full fist: ALL 4 fingers curled (tip closer to wrist than proximal)
+  // plus thumb curled in. Strict threshold (0.95) to avoid false positives.
+  const allFingersCurled =
+    indexTip.distanceTo(wrist) < indexProx.distanceTo(wrist) * 0.95 &&
+    middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 0.95 &&
+    ringTip.distanceTo(wrist) < ringProx.distanceTo(wrist) * 0.95 &&
+    pinkyTip.distanceTo(wrist) < pinkyProx.distanceTo(wrist) * 0.95;
+
+  // Thumb must also be tucked (tip close to index proximal, not extended)
+  const thumbTucked = thumbTip.distanceTo(indexProx) < 0.06;
+
+  const isGrabbing = allFingersCurled && thumbTucked;
+  const grabCenter = wrist.clone().lerp(middleTip, 0.4);
+
+  return { grabbing: isGrabbing, grabCenter };
+}
+
 function detectPinch(inputSource, frame, refSpace) {
   const thumbTip = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
   const indexTip = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
@@ -425,6 +505,15 @@ renderer.setAnimationLoop((timestamp, frame) => {
 
   // ── Update WindowManager (handles controller drag, hover, resize) ──
   wm.update(frame, dt, elapsed, [controller0, controller1]);
+
+  // ── Update Code City hover detection ──
+  codeCity.updateHover([controller0, controller1]);
+
+  // ── Update tooltip position to follow right hand ──
+  if (codeCity._tooltipWindow && codeCity._rightHandPos) {
+    const tp = codeCity._rightHandPos;
+    codeCity._tooltipWindow.root.position.set(tp.x, tp.y + 0.15, tp.z);
+  }
 
   // ── Hand tracking update ──
   if (frame && renderer.xr.isPresenting) {
@@ -537,10 +626,32 @@ renderer.setAnimationLoop((timestamp, frame) => {
           wm.onPinchMove(idx, pinchResult.pinchPoint);
         }
 
+        // ── Hand grab → move/rotate/scale Code City ──
+        const grabResult = detectGrab(inputSource, frame, refSpace);
+        if (grabResult.grabbing && !state.grabbing) {
+          state.grabbing = true;
+          if (grabResult.grabCenter) {
+            codeCity.onGrabStart(idx, grabResult.grabCenter);
+          }
+        } else if (!grabResult.grabbing && state.grabbing) {
+          state.grabbing = false;
+          codeCity.onGrabEnd(idx);
+        }
+
+        if (state.grabbing && grabResult.grabCenter) {
+          codeCity.onGrabMove(idx, grabResult.grabCenter);
+        }
+
         // ── Hand hover detection (index finger tip) ──
         const indexTipPos = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
         if (indexTipPos) {
           wm.updateHandHover(idx, indexTipPos);
+        }
+
+        // ── Track right hand position for tooltip following ──
+        if (state.handedness === 'right') {
+          const wristPos = getJointPos(inputSource, 'wrist', frame, refSpace);
+          if (wristPos) codeCity._rightHandPos = wristPos;
         }
       });
     }
