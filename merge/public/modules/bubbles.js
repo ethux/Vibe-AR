@@ -4,6 +4,8 @@
 //  Live-updating: WebSocket watcher + polling fallback
 // ═══════════════════════════════════════════════════════════════════
 
+import { FileViewerWindow } from './FileViewerWindow.js';
+
 const EXT_COLORS = {
   js: 0xf7df1e, ts: 0x3178c6, tsx: 0x61dafb, jsx: 0x61dafb,
   py: 0x3776ab, css: 0x264de4, html: 0xe34c26,
@@ -95,6 +97,7 @@ class FileBubbleManager {
     this.openedBubble = null;
     this.currentPath = '.';
     this._fileWindow = null;
+    this._fileViewer = new FileViewerWindow(this.wm);
     this._watchWs = null;
     this._pollTimer = null;
     this._watchGen = 0;   // generation counter to prevent stale WS handlers
@@ -557,52 +560,14 @@ class FileBubbleManager {
   _showFileInWindow(filename, content, position) {
     // Don't close previous — allow multiple panels open (Iron Man multi-panel)
     const pos = position ? [position.x, position.y, position.z] : [0.4, 1.4, -0.7];
-    const win = this.wm.createWindow({
-      title: filename.toUpperCase(),
-      width: 0.5,
-      height: 0.4,
+    const handle = this._fileViewer.open({
+      filename,
+      content,
       position: pos,
-      canvasWidth: 512,
-      canvasHeight: 400,
-      closable: true,
-      content: (ctx, w, h) => {
-        ctx.fillStyle = '#0a0a0a';
-        ctx.fillRect(0, 0, w, h);
-
-        // Holographic scan-line overlay
-        ctx.strokeStyle = 'rgba(255, 112, 0, 0.04)';
-        for (let y = 0; y < h; y += 3) {
-          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-        }
-
-        // Syntax-colored code
-        ctx.font = '13px monospace';
-        const lines = content.split('\n');
-        const maxLines = Math.floor((h - 20) / 16);
-        for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-          const line = lines[i].substring(0, 60);
-          // Simple syntax coloring
-          if (/^\s*(\/\/|#|--|\*)/.test(line)) {
-            ctx.fillStyle = '#666'; // comments
-          } else if (/^\s*(import|from|export|const|let|var|function|class|def|return|if|else|for|while)\b/.test(line)) {
-            ctx.fillStyle = '#FF7000'; // keywords → Mistral orange
-          } else if (/"[^"]*"|'[^']*'|`[^`]*`/.test(line)) {
-            ctx.fillStyle = '#50fa7b'; // strings → green
-          } else {
-            ctx.fillStyle = '#e0e0e0'; // default
-          }
-          ctx.fillText(line, 10, 18 + i * 16);
-        }
-
-        // Line numbers
-        ctx.fillStyle = 'rgba(255,112,0,0.3)';
-        ctx.font = '11px monospace';
-        for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-          ctx.fillText(String(i + 1).padStart(3), 490, 18 + i * 16);
-        }
-      }
+      width: 0.6,
+      height: 0.45,
     });
-    this._fileWindow = win;
+    this._fileWindow = handle.window;
   }
 
   // ── MCP Scene Control Methods ────────────────────────
