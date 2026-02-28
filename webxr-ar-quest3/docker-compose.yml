@@ -1,0 +1,24 @@
+services:
+  vibe-terminal:
+    build: .
+    environment:
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+    volumes:
+      - ./workspace:/workspace
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./public:/app/public
+      - ./certs:/app/certs:ro
+    environment:
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - TTYD_URL=http://vibe-terminal:7681
+    depends_on:
+      - vibe-terminal
