@@ -357,30 +357,21 @@ export function initScene() {
             }
           }
 
-          // Palm closed (fist) → hide mascot + stop recording or TTS
-          if (!s.palmOpen && anim.wasOpen) {
-            const isFist = detectGrab(src, frame, ref);
-            if (isFist && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-              s.lastGestureTime = now;
-              // Hide mascot
-              if (anim.active) {
-                anim.active.fastHide(0.08);
-                anim.active = null;
-              }
-              if (getIsRecording()) {
-                log(`[HAND] ${handedness} FIST — stopping recording`);
-                stopRecording();
-              } else if (isTtsSpeaking()) {
-                log(`[HAND] ${handedness} FIST — stopping TTS`);
-                stopTTS();
-              }
+          // Palm closed (any reason) → hide mascot + stop recording or TTS
+          if (!s.palmOpen && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            s.lastGestureTime = now;
+            // Hide mascot
+            if (anim.active) {
+              anim.active.fastHide(0.08);
+              anim.active = null;
             }
-          }
-
-          // If palm closes without fist (partial), still hide mascot
-          if (!s.palmOpen && anim.wasOpen && anim.active) {
-            anim.active.fastHide(0.12);
-            anim.active = null;
+            if (getIsRecording()) {
+              log(`[HAND] ${handedness} palm CLOSED — stopping recording`);
+              stopRecording();
+            } else if (isTtsSpeaking()) {
+              log(`[HAND] ${handedness} palm CLOSED — stopping TTS`);
+              stopTTS();
+            }
           }
 
           anim.wasOpen = s.palmOpen;
