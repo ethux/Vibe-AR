@@ -16,7 +16,23 @@ export function enableTtsCollecting() {
 export function onTermOutput() {
   if (!ttsCollecting) return;
   clearTimeout(ttsTimeout);
-  ttsTimeout = setTimeout(() => finishTtsCollect(), 2000);
+  // 10+ chars collected → short wait (done streaming), otherwise keep waiting
+  const collected = _peekCollectedLength();
+  const delay = collected >= 10 ? 2000 : 8000;
+  ttsTimeout = setTimeout(() => finishTtsCollect(), delay);
+}
+
+function _peekCollectedLength() {
+  const term = getTerm();
+  if (!term) return 0;
+  const buf = term.buffer.active;
+  const endLine = buf.baseY + buf.cursorY;
+  let len = 0;
+  for (let i = ttsStartLine + 1; i < endLine; i++) {
+    const line = buf.getLine(i);
+    if (line) len += line.translateToString(true).trim().length;
+  }
+  return len;
 }
 
 function finishTtsCollect() {
@@ -42,7 +58,7 @@ function finishTtsCollect() {
   });
 
   const responseText = filtered.join(' ').trim();
-  if (responseText.length < 10) { log('[TTS] Response too short, skipping'); return; }
+  if (responseText.length < 3) { log('[TTS] Response too short, skipping'); return; }
 
   const ttsText = responseText.length > 500 ? responseText.substring(0, 500) + '...' : responseText;
   log(`[TTS] Speaking ${ttsText.length} chars: "${ttsText.substring(0, 80)}..."`);

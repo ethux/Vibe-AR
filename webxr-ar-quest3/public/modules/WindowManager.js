@@ -290,14 +290,20 @@ class ManagedWindow {
   _drawTitleCanvas() {
     const ctx = this._titleCtx, w = this._titleCanvas.width, h = this._titleCanvas.height;
     const ps = 3;
-    ctx.fillStyle = '#0A0A0A';
+    // Dark background matching content
+    ctx.fillStyle = '#0c0c12';
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = PixelArt.ORANGE;
-    ctx.fillRect(0, 0, w, ps);
+    // Thin orange accent line at top (2px)
+    ctx.fillStyle = '#FF6B00';
+    ctx.fillRect(0, 0, w, 2);
+    // Subtle bottom separator
+    ctx.fillStyle = 'rgba(255, 107, 0, 0.15)';
+    ctx.fillRect(0, h - 1, w, 1);
+    // Pixel title text
     const textW = PixelArt.measurePixelText(this.title, ps);
     const textX = (w - textW) / 2;
-    const textY = (h - 7 * ps) / 2 + ps;
-    PixelArt.drawPixelText(ctx, this.title, textX, textY, ps, PixelArt.ORANGE_LIGHT);
+    const textY = (h - 7 * ps) / 2 + 2;
+    PixelArt.drawPixelText(ctx, this.title, textX, textY, ps, '#FF6B00');
     if (this._titleTex) this._titleTex.needsUpdate = true;
   }
 
@@ -305,7 +311,7 @@ class ManagedWindow {
     const sideH = this._contentH;
     this._borderMeshes = {};
     const makeBorderMat = () => new THREE.MeshBasicMaterial({
-      color: 0xF97316, transparent: true, opacity: 0.35, side: THREE.DoubleSide
+      color: 0xFF6B00, transparent: true, opacity: 0.15, side: THREE.DoubleSide
     });
 
     const leftGeo = new THREE.PlaneGeometry(border, sideH);
@@ -342,7 +348,7 @@ class ManagedWindow {
     pillCanvas.width = PC_W; pillCanvas.height = PC_H;
     const pctx = pillCanvas.getContext('2d');
     pctx.imageSmoothingEnabled = false;
-    pctx.fillStyle = '#ffffff';
+    pctx.fillStyle = '#FF6B00';
     pctx.fillRect(1, 0, PC_W-2, PC_H);
     pctx.fillRect(0, 1, 1, PC_H-2);
     pctx.fillRect(PC_W-1, 1, 1, PC_H-2);
@@ -352,7 +358,7 @@ class ManagedWindow {
 
     const dragGeo = new THREE.PlaneGeometry(PILL_W, PILL_H);
     this._dragBarMat = new THREE.MeshBasicMaterial({
-      map: pillTex, transparent: true, opacity: 0.35, side: THREE.DoubleSide
+      map: pillTex, transparent: true, opacity: 0.20, side: THREE.DoubleSide
     });
     this.dragBarMesh = new THREE.Mesh(dragGeo, this._dragBarMat);
     this.dragBarMesh.position.set(-GROUP_W/2 + PILL_W/2, barY, 0.001);
@@ -364,7 +370,7 @@ class ManagedWindow {
     closeCanvas.width = CC; closeCanvas.height = CC;
     const cctx = closeCanvas.getContext('2d');
     cctx.imageSmoothingEnabled = false;
-    cctx.fillStyle = '#ffffff';
+    cctx.fillStyle = '#FF6B00';
     cctx.fillRect(1, 0, CC-2, CC);
     cctx.fillRect(0, 1, CC, CC-2);
 
@@ -373,7 +379,7 @@ class ManagedWindow {
 
     const closeGeo = new THREE.PlaneGeometry(CLOSE_W, CLOSE_W);
     this._closeBtnMat = new THREE.MeshBasicMaterial({
-      map: closeTex, transparent: true, opacity: 0.35, side: THREE.DoubleSide
+      map: closeTex, transparent: true, opacity: 0.20, side: THREE.DoubleSide
     });
     this.closeBtnMesh = new THREE.Mesh(closeGeo, this._closeBtnMat);
     this.closeBtnMesh.position.set(-GROUP_W/2 + PILL_W + GAP + CLOSE_W/2, barY, 0.001);
@@ -393,7 +399,7 @@ class ManagedWindow {
       canvas.width = C; canvas.height = C;
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#FF6B00';
       ctx.fillRect(0, 0, C, 2);
       ctx.fillRect(0, 0, 2, C);
       return canvas;
@@ -473,7 +479,7 @@ class ManagedWindow {
     const lerpSpeed = 8;
 
     const dragHover = this.hoverTarget === 'dragBar';
-    const dragTargetOpacity = dragHover ? 0.9 : 0.35;
+    const dragTargetOpacity = dragHover ? 0.7 : 0.20;
     this._dragBarMat.opacity += (dragTargetOpacity - this._dragBarMat.opacity) * lerpSpeed * dt;
     const dragTargetScale = dragHover ? 1.15 : 1.0;
     const cs = this.dragBarMesh.scale.x;
@@ -481,7 +487,7 @@ class ManagedWindow {
 
     if (this.closable) {
       const closeHover = this.hoverTarget === 'closeBtn';
-      const closeTargetOpacity = closeHover ? 1.0 : 0.35;
+      const closeTargetOpacity = closeHover ? 0.8 : 0.20;
       this._closeBtnMat.opacity += (closeTargetOpacity - this._closeBtnMat.opacity) * lerpSpeed * dt;
       const closeTargetScale = closeHover ? 1.4 : 1.0;
       const ccs = this.closeBtnMesh.scale.x;
@@ -498,7 +504,7 @@ class ManagedWindow {
 
   _rebuildAfterResize() {
     while (this.root.children.length > 0) this.root.remove(this.root.children[0]);
-    this._build_internal(0.015, 0.04, 0.012);
+    this._build_internal(0.004, 0.04, 0.012);
   }
 
   _build_internal(border, titleH, bottomH) {
