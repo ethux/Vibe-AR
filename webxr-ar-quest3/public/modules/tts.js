@@ -1,69 +1,45 @@
 // ─── TTS (ElevenLabs) — speak terminal responses ───
-import { getTerm } from './state.js';
+// Calls Mistral API directly for clean text, then speaks via ElevenLabs
 import { log } from './logging.js';
 
-let ttsCollecting = false;
-let ttsStartLine = 0;
-let ttsTimeout = null;
 let ttsSpeaking = false;
 
-export function enableTtsCollecting() {
-  const term = getTerm();
-  ttsStartLine = term ? term.buffer.active.baseY + term.buffer.active.cursorY : 0;
-  ttsCollecting = true;
-}
+/**
+ * Ask Mistral for a short spoken reply, then speak it via ElevenLabs TTS.
+ * Called from voice.js after the transcribed command is sent to terminal.
+ */
+export async function speakReply(userText) {
+  if (ttsSpeaking) { log('[TTS] Already speaking, skip'); return; }
+  try {
+    log(`[TTS] Getting reply for: "${userText}"`);
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mistral-small-latest',
+        messages: [
+          { role: 'system', content: 'You are a helpful coding assistant. Give a brief spoken reply (1-3 sentences). No markdown, no code blocks — just plain spoken text.' },
+          { role: 'user', content: userText },
+        ],
+        max_tokens: 200,
+        temperature: 0.7,
+      }),
+    });
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content?.trim();
+    if (!reply || reply.length < 3) { log(`[TTS] Empty reply, skipping`); return; }
 
-export function onTermOutput() {
-  if (!ttsCollecting) return;
-  clearTimeout(ttsTimeout);
-  // 10+ chars collected → short wait (done streaming), otherwise keep waiting
-  const collected = _peekCollectedLength();
-  const delay = collected >= 10 ? 2000 : 8000;
-  ttsTimeout = setTimeout(() => finishTtsCollect(), delay);
-}
-
-function _peekCollectedLength() {
-  const term = getTerm();
-  if (!term) return 0;
-  const buf = term.buffer.active;
-  const endLine = buf.baseY + buf.cursorY;
-  let len = 0;
-  for (let i = ttsStartLine + 1; i < endLine; i++) {
-    const line = buf.getLine(i);
-    if (line) len += line.translateToString(true).trim().length;
+    const ttsText = reply.length > 500 ? reply.substring(0, 500) + '...' : reply;
+    log(`[TTS] Speaking: "${ttsText.substring(0, 120)}"`);
+    speakTTS(ttsText);
+  } catch (e) {
+    log(`[TTS] Chat error: ${e.message}`);
   }
-  return len;
 }
 
-function finishTtsCollect() {
-  clearTimeout(ttsTimeout);
-  ttsCollecting = false;
-  const term = getTerm();
-  if (!term) return;
-
-  const buf = term.buffer.active;
-  const endLine = buf.baseY + buf.cursorY;
-  const lines = [];
-  for (let i = ttsStartLine + 1; i < endLine; i++) {
-    const line = buf.getLine(i);
-    if (!line) continue;
-    const text = line.translateToString(true).trim();
-    if (text) lines.push(text);
-  }
-
-  const filtered = lines.filter(l => {
-    if (/^(root@|vibe>|\$|#|>>>)\s*/i.test(l)) return false;
-    if (/^\[.*\]\s*$/.test(l)) return false;
-    return true;
-  });
-
-  const responseText = filtered.join(' ').trim();
-  if (responseText.length < 3) { log('[TTS] Response too short, skipping'); return; }
-
-  const ttsText = responseText.length > 500 ? responseText.substring(0, 500) + '...' : responseText;
-  log(`[TTS] Speaking ${ttsText.length} chars: "${ttsText.substring(0, 80)}..."`);
-  speakTTS(ttsText);
-}
+// Keep these as no-ops so terminal.js import doesn't break
+export function enableTtsCollecting() {}
+export function onTermOutput() {}
 
 // Streaming PCM playback
 const PCM_RATE = 24000;
