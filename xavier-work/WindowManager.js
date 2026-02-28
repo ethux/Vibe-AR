@@ -71,6 +71,9 @@ class WindowManager {
       { dragging: false, window: null, offset: new THREE.Vector3() },
     ];
 
+    // Two-hand pinch state (rotate + scale when both hands grab same window)
+    this._twoHandAnchor = null;
+
     // Resize state
     this._resizeState = {
       active: false,
@@ -172,6 +175,28 @@ class WindowManager {
   // ── Hand pinch interaction ────────────────────────────────────
 
   onPinchStart(handIdx, pinchPoint) {
+    const otherState = this._handDragState[1 - handIdx];
+
+    // ── PRIORITY: If the OTHER hand is already dragging a window,
+    //    let this hand join by pinching ANYWHERE near that window ──
+    if (otherState.dragging && otherState.window) {
+      const win = otherState.window;
+      const winPos = new THREE.Vector3();
+      win.root.getWorldPosition(winPos);
+      // Generous hit zone — within ~0.3m of the window center
+      const maxReach = Math.max(win.width, win.height) + 0.15;
+      if (pinchPoint.distanceTo(winPos) < maxReach) {
+        this._handDragState[handIdx].dragging = true;
+        this._handDragState[handIdx].window = win;
+        this._handDragState[handIdx].offset.copy(win.root.position).sub(pinchPoint);
+        this._handDragState[handIdx].pinchPoint = pinchPoint.clone();
+        win.dragging = true;
+        // Both hands on same window → init two-hand transform
+        this._initTwoHandAnchor(win);
+        return true;
+      }
+    }
+
     for (const win of this.windows) {
       if (win.closed || !win.visible) continue;
 
@@ -184,7 +209,7 @@ class WindowManager {
         return true;
       }
 
-      // Check drag targets
+      // Check drag targets (title bar)
       for (const target of win.getDragTargets()) {
         const targetWorld = new THREE.Vector3();
         target.getWorldPosition(targetWorld);
@@ -192,6 +217,7 @@ class WindowManager {
           this._handDragState[handIdx].dragging = true;
           this._handDragState[handIdx].window = win;
           this._handDragState[handIdx].offset.copy(win.root.position).sub(pinchPoint);
+          this._handDragState[handIdx].pinchPoint = pinchPoint.clone();
           win.dragging = true;
           win.focus();
           return true;
@@ -214,9 +240,18 @@ class WindowManager {
   onPinchEnd(handIdx) {
     const state = this._handDragState[handIdx];
     if (state.dragging && state.window) {
-      state.window.dragging = false;
+      const win = state.window;
       state.dragging = false;
       state.window = null;
+      this._twoHandAnchor = null;
+
+      // If the OTHER hand is still dragging this window, recalculate its offset
+      const other = this._handDragState[1 - handIdx];
+      if (other.dragging && other.window === win) {
+        other.offset.copy(win.root.position).sub(other.pinchPoint || new THREE.Vector3());
+      } else {
+        win.dragging = false;
+      }
     }
     if (this._resizeState.active && this._resizeState.handIdx === handIdx) {
       this._endResize();
@@ -225,14 +260,102 @@ class WindowManager {
 
   onPinchMove(handIdx, pinchPoint) {
     const state = this._handDragState[handIdx];
+
+    // Always track latest pinch position
+    if (state.dragging) {
+      state.pinchPoint = pinchPoint.clone();
+    }
+
     if (state.dragging && state.window) {
-      const target = pinchPoint.clone().add(state.offset);
-      state.window.root.position.copy(target);
-      // Don't lookAt during drag — rotation changes matrixWorld and breaks offset
+      const other = this._handDragState[1 - handIdx];
+
+      // ── Two-hand mode: rotate + scale + move ──
+      // The goal: the two grab points in LOCAL window space must map
+      // exactly to the current hand world positions after transform.
+      if (other.dragging && other.window === state.window && this._twoHandAnchor) {
+        const anchor = this._twoHandAnchor;
+        const win = state.window;
+
+        const p0 = this._handDragState[0].pinchPoint;
+        const p1 = this._handDragState[1].pinchPoint;
+        if (!p0 || !p1) return;
+
+        // Where hands grabbed in local space (XZ plane, Y ignored for rotation)
+        const lx0 = anchor.local0.x, lz0 = anchor.local0.z;
+        const lx1 = anchor.local1.x, lz1 = anchor.local1.z;
+
+        // Current hand world positions
+        const wx0 = p0.x, wz0 = p0.z;
+        const wx1 = p1.x, wz1 = p1.z;
+
+        // Local vector between the two grab points
+        const ldx = lx1 - lx0, ldz = lz1 - lz0;
+        const localDist = Math.sqrt(ldx * ldx + ldz * ldz);
+
+        // World vector between the two hands
+        const wdx = wx1 - wx0, wdz = wz1 - wz0;
+        const worldDist = Math.sqrt(wdx * wdx + wdz * wdz);
+
+        // Scale: ratio of world distance to local distance
+        const newScale = (localDist > 0.001)
+          ? Math.max(0.2, Math.min(4.0, worldDist / localDist))
+          : anchor.startScale;
+        win.root.scale.setScalar(newScale);
+
+        // Rotation: angle difference between local vector and world vector
+        const localAngle = Math.atan2(ldx, ldz);
+        const worldAngle = Math.atan2(wdx, wdz);
+        const newRotY = worldAngle - localAngle;
+        win.root.rotation.y = newRotY;
+
+        // Position: place so that local grab point 0 maps to hand 0 in world.
+        // Transform local0 by scale + rotation to get its world-space offset from origin:
+        const cosR = Math.cos(newRotY);
+        const sinR = Math.sin(newRotY);
+        const scaledLocalX = lx0 * newScale;
+        const scaledLocalZ = lz0 * newScale;
+        const rotatedX = scaledLocalX * cosR + scaledLocalZ * sinR;
+        const rotatedZ = -scaledLocalX * sinR + scaledLocalZ * cosR;
+
+        win.root.position.x = wx0 - rotatedX;
+        win.root.position.z = wz0 - rotatedZ;
+
+        // Y: follow hand midpoint Y with the original offset
+        const midY = (p0.y + p1.y) / 2;
+        const scaledLocalY0 = anchor.local0.y * newScale;
+        win.root.position.y = (p0.y + p1.y) / 2 - (anchor.local0.y + anchor.local1.y) / 2 * newScale;
+
+      } else if (!other.dragging || other.window !== state.window) {
+        // ── Single-hand drag ──
+        const target = pinchPoint.clone().add(state.offset);
+        state.window.root.position.copy(target);
+      }
     }
     if (this._resizeState.active && this._resizeState.handIdx === handIdx) {
       this._updateResize(pinchPoint);
     }
+  }
+
+  // ── Two-hand anchor (rotate + scale windows) ─────────────────
+
+  _initTwoHandAnchor(win) {
+    const p0 = this._handDragState[0].pinchPoint;
+    const p1 = this._handDragState[1].pinchPoint;
+    if (!p0 || !p1) return;
+
+    // Convert each hand's world grab point into the window's LOCAL space.
+    // This is where the hand "touched" on the window — these must stay
+    // glued to the hand positions forever during the gesture.
+    const invMatrix = new THREE.Matrix4().copy(win.root.matrixWorld).invert();
+
+    const local0 = p0.clone().applyMatrix4(invMatrix);
+    const local1 = p1.clone().applyMatrix4(invMatrix);
+
+    this._twoHandAnchor = {
+      local0: local0,
+      local1: local1,
+      startScale: win.root.scale.x,
+    };
   }
 
   // ── Resize logic ──────────────────────────────────────────────
