@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vibe AR – Pixel File Explorer</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      overflow: hidden;
+      background: #0a0a12;
+      font-family: 'Press Start 2P', monospace;
+      cursor: crosshair;
+    }
+    canvas { display: block; }
+
+    #hud {
+      position: absolute; top: 20px; left: 20px;
+      z-index: 10; pointer-events: none;
+    }
+    #hud h1 {
+      font-size: 14px;
+      color: #FF7000;
+      text-shadow: 0 0 20px rgba(255,112,0,0.5);
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+    }
+    #hud p {
+      font-size: 8px;
+      color: #666;
+      letter-spacing: 1px;
+    }
+
+    #breadcrumb {
+      position: absolute; top: 20px; right: 20px;
+      z-index: 10; pointer-events: none;
+      font-size: 8px; color: #FF7000;
+      text-shadow: 0 0 10px rgba(255,112,0,0.3);
+      text-align: right;
+    }
+
+    #preview-panel {
+      display: none;
+      position: absolute;
+      right: 30px; top: 80px;
+      width: 380px; max-height: calc(100vh - 120px);
+      background: rgba(10,10,18,0.95);
+      border: 2px solid #FF7000;
+      border-radius: 4px;
+      z-index: 10;
+      box-shadow: 0 0 40px rgba(255,112,0,0.15);
+      overflow: hidden;
+      image-rendering: pixelated;
+    }
+    #preview-header {
+      background: #FF7000;
+      padding: 8px 12px;
+      display: flex; justify-content: space-between; align-items: center;
+      cursor: pointer;
+    }
+    #preview-header span {
+      font-size: 8px; color: #0a0a12;
+      letter-spacing: 1px;
+    }
+    #preview-header .close-btn {
+      font-size: 10px; color: #0a0a12;
+      pointer-events: auto; cursor: pointer;
+      border: none; background: none;
+      font-family: 'Press Start 2P', monospace;
+    }
+    #preview-content {
+      padding: 12px;
+      font-size: 9px;
+      color: #b0b0c0;
+      line-height: 1.8;
+      overflow-y: auto;
+      max-height: calc(100vh - 180px);
+      white-space: pre;
+      font-family: 'Courier New', monospace;
+    }
+    #preview-content .keyword { color: #FF7000; }
+    #preview-content .string { color: #50fa7b; }
+    #preview-content .comment { color: #555; }
+    #preview-content .func { color: #8be9fd; }
+
+    #stats {
+      position: absolute; bottom: 20px; left: 20px;
+      font-size: 7px; color: #333;
+      z-index: 10; pointer-events: none;
+      letter-spacing: 1px;
+    }
+
+    .pixel-border {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <h1>VIBE EXPLORER</h1>
+    <p>CLICK FOLDERS TO EXPAND · CLICK FILES TO PREVIEW</p>
+  </div>
+
+  <div id="breadcrumb">~/project</div>
+
+  <div id="preview-panel" class="pixel-border">
+    <div id="preview-header">
+      <span id="preview-filename">file.js</span>
+      <button class="close-btn" onclick="closePreview()">X</button>
+    </div>
+    <div id="preview-content"></div>
+  </div>
+
+  <div id="stats">
+    <span id="file-count">0 FILES</span> ·
+    <span id="folder-count">0 FOLDERS</span>
+  </div>
+
+  <script src="three.min.js"></script>
+  <script src="explorer.js"></script>
+</body>
+</html>
