@@ -18,7 +18,12 @@ async function transcribeAndSend(blob, mime) {
     log('[STT] Transcribing...');
     if (cmdInput) cmdInput.placeholder = 'Transcribing...';
     const ab = await blob.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
+    const bytes = new Uint8Array(ab);
+    let b64 = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    b64 = btoa(b64);
     const res = await fetch('/api/transcribe', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: b64, mimeType: mime }),
