@@ -9,9 +9,11 @@ import { build3DKeyboard, toggleKb3D, handleKbKeyPress, getKbKeyMeshes, isKbVisi
 import { toggleMicFromBtn, setMicBtnMesh, startRecording, stopRecording, getIsRecording } from './voice.js';
 import { makeTextTexture } from './textures.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
+import { AnimationManager } from './AnimationManager.js';
 
 let scene, camera, clock;
 let wm, termWin, kbBtnMesh, micBtnMesh;
+let animMgr;  // mascot animation manager
 
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
@@ -34,6 +36,9 @@ export function initScene() {
   const dl = new THREE.DirectionalLight(0xffffff, 1.0);
   dl.position.set(2, 4, 3);
   scene.add(dl);
+
+  // ── Animation Manager for mascot character ──
+  animMgr = new AnimationManager(scene);
 
   // ── WindowManager + terminal window ──
   wm = new WindowManager(scene, renderer, camera);
@@ -133,20 +138,34 @@ export function initScene() {
 
   // ── Hand tracking ──
   const hs = [
-    { pinching: false, handOpen: false, handClosed: false, lastGestureTime: 0 },
-    { pinching: false, handOpen: false, handClosed: false, lastGestureTime: 0 },
+    { pinching: false, palmOpen: false, palmOpenSmooth: 0, lastGestureTime: 0 },
+    { pinching: false, palmOpen: false, palmOpenSmooth: 0, lastGestureTime: 0 },
   ];
 
-  // Gesture cooldown to prevent rapid toggling (ms)
-  const GESTURE_COOLDOWN = 800;
+  // Per-hand mascot animation state
+  const handAnimState = [
+    { active: null, wasOpen: false },  // left
+    { active: null, wasOpen: false },  // right
+  ];
+
+  // Gesture cooldown (ms)
+  const GESTURE_COOLDOWN = 600;
+
+  // Temp vectors for palm detection
+  const _v3A = new THREE.Vector3();
+  const _v3B = new THREE.Vector3();
+  const _v3C = new THREE.Vector3();
 
   function jointPos(src, name, frame, ref) {
+    if (!src || !src.hand) return null;
     const j = src.hand.get(name);
     if (!j) return null;
-    const pose = frame.getJointPose(j, ref);
-    if (!pose) return null;
-    const p = pose.transform.position;
-    return new THREE.Vector3(p.x, p.y, p.z);
+    try {
+      const pose = frame.getJointPose(j, ref);
+      if (!pose) return null;
+      const p = pose.transform.position;
+      return new THREE.Vector3(p.x, p.y, p.z);
+    } catch (e) { return null; }
   }
 
   function pinch(src, frame, ref) {
@@ -157,51 +176,88 @@ export function initScene() {
   }
 
   /**
-   * Detect hand open/close gesture.
-   * Open hand  = all 4 finger tips are far from the wrist (fingers extended)
-   * Closed hand = all 4 finger tips are close to the wrist (fist)
+   * Proper palm-open detection ported from xavier-work.
+   * Uses proximal joints (reliable on Quest 3), finger spread, and palm facing.
    */
-  function detectHandOpenClose(src, frame, ref) {
-    const wrist = jointPos(src, 'wrist', frame, ref);
-    if (!wrist) return 'unknown';
+  function detectPalmOpen(src, frame, ref, handedness) {
+    const wrist     = jointPos(src, 'wrist', frame, ref);
+    const indexTip  = jointPos(src, 'index-finger-tip', frame, ref);
+    const middleTip = jointPos(src, 'middle-finger-tip', frame, ref);
+    const ringTip   = jointPos(src, 'ring-finger-tip', frame, ref);
+    const pinkyTip  = jointPos(src, 'pinky-finger-tip', frame, ref);
+    const indexProx  = jointPos(src, 'index-finger-phalanx-proximal', frame, ref);
+    const middleProx = jointPos(src, 'middle-finger-phalanx-proximal', frame, ref);
+    const ringProx   = jointPos(src, 'ring-finger-phalanx-proximal', frame, ref);
+    const pinkyProx  = jointPos(src, 'pinky-finger-phalanx-proximal', frame, ref);
 
-    const fingerTips = [
-      'index-finger-tip',
-      'middle-finger-tip',
-      'ring-finger-tip',
-      'pinky-finger-tip',
-    ];
-    const fingerMCPs = [
-      'index-finger-metacarpal',
-      'middle-finger-metacarpal',
-      'ring-finger-metacarpal',
-      'pinky-finger-metacarpal',
-    ];
-
-    let extendedCount = 0;
-    let curledCount = 0;
-
-    for (let i = 0; i < fingerTips.length; i++) {
-      const tip = jointPos(src, fingerTips[i], frame, ref);
-      const mcp = jointPos(src, fingerMCPs[i], frame, ref);
-      if (!tip || !mcp) continue;
-
-      const tipDist = tip.distanceTo(wrist);
-      const mcpDist = mcp.distanceTo(wrist);
-
-      // If finger tip is farther than MCP from wrist, finger is extended
-      if (tipDist > mcpDist * 1.3) {
-        extendedCount++;
-      }
-      // If finger tip is closer to wrist than MCP, finger is curled
-      else if (tipDist < mcpDist * 0.9) {
-        curledCount++;
-      }
+    if (!wrist || !indexTip || !middleTip || !ringTip || !pinkyTip
+        || !indexProx || !middleProx || !ringProx || !pinkyProx) {
+      return { open: false, palmCenter: null };
     }
 
-    if (extendedCount >= 3) return 'open';
-    if (curledCount >= 3) return 'closed';
-    return 'partial';
+    // 1) Fingers extended: tip farther from wrist than proximal
+    const extendedCount = [
+      indexTip.distanceTo(wrist) > indexProx.distanceTo(wrist) * 1.05,
+      middleTip.distanceTo(wrist) > middleProx.distanceTo(wrist) * 1.05,
+      ringTip.distanceTo(wrist) > ringProx.distanceTo(wrist) * 1.05,
+      pinkyTip.distanceTo(wrist) > pinkyProx.distanceTo(wrist) * 1.05,
+    ].filter(Boolean).length;
+
+    // 2) Fingers spread
+    const spread =
+      indexTip.distanceTo(middleTip) > 0.012 &&
+      middleTip.distanceTo(ringTip) > 0.010 &&
+      ringTip.distanceTo(pinkyTip) > 0.008;
+
+    // 3) Palm facing up or toward camera
+    const palmCenter = wrist.clone().lerp(middleTip, 0.4);
+    _v3A.copy(pinkyProx).sub(indexProx);
+    _v3B.copy(middleTip).sub(wrist);
+    let palmNormal;
+    if (handedness === 'right') {
+      palmNormal = _v3C.crossVectors(_v3B, _v3A).normalize();
+    } else {
+      palmNormal = _v3C.crossVectors(_v3A, _v3B).normalize();
+    }
+    const facingUp = palmNormal.y > 0.25;
+    const xrCam = renderer.xr.getCamera();
+    const camPos = new THREE.Vector3();
+    xrCam.getWorldPosition(camPos);
+    const toCam = camPos.clone().sub(palmCenter).normalize();
+    const facingCam = palmNormal.dot(toCam) > 0.1;
+
+    const isOpen = extendedCount >= 3 && spread && (facingUp || facingCam);
+    return { open: isOpen, palmCenter };
+  }
+
+  /**
+   * Detect closed fist (grab) — all fingers curled + thumb tucked.
+   */
+  function detectGrab(src, frame, ref) {
+    const wrist     = jointPos(src, 'wrist', frame, ref);
+    const thumbTip  = jointPos(src, 'thumb-tip', frame, ref);
+    const indexTip  = jointPos(src, 'index-finger-tip', frame, ref);
+    const middleTip = jointPos(src, 'middle-finger-tip', frame, ref);
+    const ringTip   = jointPos(src, 'ring-finger-tip', frame, ref);
+    const pinkyTip  = jointPos(src, 'pinky-finger-tip', frame, ref);
+    const indexProx  = jointPos(src, 'index-finger-phalanx-proximal', frame, ref);
+    const middleProx = jointPos(src, 'middle-finger-phalanx-proximal', frame, ref);
+    const ringProx   = jointPos(src, 'ring-finger-phalanx-proximal', frame, ref);
+    const pinkyProx  = jointPos(src, 'pinky-finger-phalanx-proximal', frame, ref);
+
+    if (!wrist || !thumbTip || !indexTip || !middleTip || !ringTip || !pinkyTip
+        || !indexProx || !middleProx || !ringProx || !pinkyProx) {
+      return false;
+    }
+
+    const allCurled =
+      indexTip.distanceTo(wrist) < indexProx.distanceTo(wrist) * 0.95 &&
+      middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 0.95 &&
+      ringTip.distanceTo(wrist) < ringProx.distanceTo(wrist) * 0.95 &&
+      pinkyTip.distanceTo(wrist) < pinkyProx.distanceTo(wrist) * 0.95;
+
+    const thumbTucked = thumbTip.distanceTo(indexProx) < 0.06;
+    return allCurled && thumbTucked;
   }
 
   // ── Render loop ──
@@ -262,39 +318,72 @@ export function initScene() {
             wm.onPinchEnd(handIdx);
           }
 
-          // ── Hand open/close gesture for voice control ──
+          // ── Palm open/close → mascot character + voice control ──
           const now = performance.now();
-          const gesture = detectHandOpenClose(src, frame, ref);
+          const handedness = src.handedness || (handIdx === 0 ? 'left' : 'right');
+          const palmResult = detectPalmOpen(src, frame, ref, handedness);
+          s.palmOpen = palmResult.open;
+          const anim = handAnimState[handIdx];
 
-          if (gesture === 'open' && !s.handOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-            s.handOpen = true;
-            s.handClosed = false;
+          // Palm just opened → spawn mascot + start recording
+          if (s.palmOpen && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
             s.lastGestureTime = now;
-
-            // Open hand → start recording if not already recording
+            // Spawn mascot above palm
+            if (anim.active) { anim.active.kill(); anim.active = null; }
+            const spawnPos = palmResult.palmCenter
+              ? palmResult.palmCenter.clone()
+              : new THREE.Vector3(0, 1.4, -0.5);
+            spawnPos.y += 0.08;
+            anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'recording' });
+            log(`[HAND] ${handedness} palm OPENED — mascot spawned, starting recording`);
+            // Start recording
             if (!getIsRecording()) {
-              log(`[HAND] ${src.handedness} hand OPENED — starting recording`);
               startRecording();
             }
-          } else if (gesture === 'closed' && !s.handClosed && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-            s.handClosed = true;
-            s.handOpen = false;
-            s.lastGestureTime = now;
-
-            if (getIsRecording()) {
-              // Close hand while recording → stop recording (sends to transcribe + chat)
-              log(`[HAND] ${src.handedness} hand CLOSED — stopping recording`);
-              stopRecording();
-            } else if (isTtsSpeaking()) {
-              // Close hand while TTS is speaking → stop TTS
-              log(`[HAND] ${src.handedness} hand CLOSED — stopping TTS`);
-              stopTTS();
-            }
-          } else if (gesture === 'partial') {
-            // Reset so next open/close is detected
-            s.handOpen = false;
-            s.handClosed = false;
           }
+
+          // While palm open, follow hand + update mode
+          if (s.palmOpen && anim.active && palmResult.palmCenter) {
+            const followPos = palmResult.palmCenter.clone();
+            followPos.y += 0.08;
+            anim.active.moveTo(followPos);
+            // Update mascot color based on state
+            if (getIsRecording()) {
+              anim.active.setMode('recording');
+            } else if (isTtsSpeaking()) {
+              anim.active.setMode('listening');
+            } else {
+              anim.active.setMode('idle');
+            }
+          }
+
+          // Palm closed (fist) → hide mascot + stop recording or TTS
+          if (!s.palmOpen && anim.wasOpen) {
+            const isFist = detectGrab(src, frame, ref);
+            if (isFist && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+              s.lastGestureTime = now;
+              // Hide mascot
+              if (anim.active) {
+                anim.active.fastHide(0.08);
+                anim.active = null;
+              }
+              if (getIsRecording()) {
+                log(`[HAND] ${handedness} FIST — stopping recording`);
+                stopRecording();
+              } else if (isTtsSpeaking()) {
+                log(`[HAND] ${handedness} FIST — stopping TTS`);
+                stopTTS();
+              }
+            }
+          }
+
+          // If palm closes without fist (partial), still hide mascot
+          if (!s.palmOpen && anim.wasOpen && anim.active) {
+            anim.active.fastHide(0.12);
+            anim.active = null;
+          }
+
+          anim.wasOpen = s.palmOpen;
 
           // Hand hover
           const indexTip = jointPos(src, 'index-finger-tip', frame, ref);
@@ -305,6 +394,10 @@ export function initScene() {
 
     // WindowManager update (hover, drag, resize animations)
     wm.update(frame, dt, elapsed, [ctrl0, ctrl1]);
+
+    // Update mascot animations (billboarding, redraw canvas)
+    const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    animMgr.update(dt, elapsed, xrCamera);
 
     renderer.render(scene, camera);
   });
