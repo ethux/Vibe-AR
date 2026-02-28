@@ -468,15 +468,27 @@ class FileBubbleManager {
     }
   }
 
-  handlePinch(pinchPoint) {
-    // Iron Man style: pinch directly opens file / navigates folder
+  // Find the closest free bubble within 12cm (not in palm)
+  findClosestFreeBubble(pinchPoint) {
     let closest = null, cd = 0.12;
     for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
       const d = pinchPoint.distanceTo(b.position);
       if (d < cd) { cd = d; closest = b; }
     }
+    return closest;
+  }
+
+  // Open a specific bubble (public entry point for drag-to-open)
+  openBubble(bubble) {
+    bubble.userData.scaleTarget = 1.3;
+    setTimeout(() => { if (bubble.userData) bubble.userData.scaleTarget = 1; }, 200);
+    this._openBubble(bubble);
+  }
+
+  handlePinch(pinchPoint) {
+    const closest = this.findClosestFreeBubble(pinchPoint);
     if (closest) {
-      // Quick pulse feedback before opening
       closest.userData.scaleTarget = 1.3;
       setTimeout(() => { if (closest.userData) closest.userData.scaleTarget = 1; }, 200);
       this._openBubble(closest, pinchPoint);
