@@ -13,6 +13,7 @@ import debugRoutes from './routes/debug.js';
 import mistralProxyRoutes from './routes/mistral-proxy.js';
 import companionProxyRoutes, { companionProxy } from './routes/companion-proxy.js';
 import codecityProxyRoutes from './routes/codecity-proxy.js';
+import sceneControlRoutes, { setupSceneControlWs } from './routes/scene-control.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -42,6 +43,7 @@ app.use(debugRoutes);
 app.use(mistralProxyRoutes);
 app.use(companionProxyRoutes);
 app.use(codecityProxyRoutes);
+app.use(sceneControlRoutes);
 
 // Catch-all error logging
 app.use((err, req, res, next) => {
@@ -57,10 +59,13 @@ const sslOptions = {
 
 const server = createServer(sslOptions, app);
 const proxy = setupTerminalProxy(app, server, TTYD_URL);
+const sceneControl = setupSceneControlWs(server);
 
-// WebSocket upgrade: companion file watcher + terminal
+// WebSocket upgrade: scene-control + companion file watcher + terminal
 server.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/api/companion/ws/')) {
+  if (req.url === '/ws/scene-control') {
+    sceneControl.upgrade(req, socket, head);
+  } else if (req.url.startsWith('/api/companion/ws/')) {
     req.url = req.url.replace('/api/companion', '/api');
     companionProxy.ws(req, socket, head);
   }
@@ -75,7 +80,9 @@ server.listen(PORT, () => {
 // HTTP server for ngrok (port 3001)
 const httpServer = createHttpServer(app);
 httpServer.on('upgrade', (req, socket, head) => {
-  if (req.url.startsWith('/api/companion/ws/')) {
+  if (req.url === '/ws/scene-control') {
+    sceneControl.upgrade(req, socket, head);
+  } else if (req.url.startsWith('/api/companion/ws/')) {
     req.url = req.url.replace('/api/companion', '/api');
     companionProxy.ws(req, socket, head);
   } else if (req.url.startsWith('/terminal')) {
