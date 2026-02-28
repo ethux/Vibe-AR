@@ -3,6 +3,9 @@ services:
     build: .
     environment:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - GH_TOKEN=${GH_TOKEN}
+      - GITHUB_TOKEN=${GH_TOKEN}
+      - VIBE_HOME=/root/.vibe
     volumes:
       - ./workspace:/workspace
     restart: unless-stopped
@@ -18,6 +21,7 @@ services:
       - ./public:/app/public
       - ./server:/app/server
       - ./certs:/app/certs:ro
+      - ./workspace:/app/workspace:ro
     environment:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}

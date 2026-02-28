@@ -84,7 +84,7 @@ function _makeLabelSprite(name, cardW) {
 const CODE_EXTS = new Set(['js','ts','tsx','jsx','py','rb','go','rs','css','html','json','yaml','yml','sh']);
 
 // Poll interval in ms (used when WebSocket is unavailable)
-const POLL_INTERVAL = 2000;
+const POLL_INTERVAL = 5000;
 
 class FileBubbleManager {
   constructor(scene, windowManager, codeCityRenderer) {
@@ -97,10 +97,15 @@ class FileBubbleManager {
     this._fileWindow = null;
     this._watchWs = null;
     this._pollTimer = null;
+    this._watchGen = 0;   // generation counter to prevent stale WS handlers
     this._lastEntryNames = new Set();
     // Bubbles pending spawn/remove animation
     this._spawning = [];  // { bubble, progress }
     this._removing = [];  // { bubble, progress }
+    // Palm-orbit grab state (from sacha-work)
+    this.palmBubbles = [];       // bubbles orbiting the left palm
+    this.leftPalmCenter = null;  // THREE.Vector3, updated by scene.js
+    this.leftPalmOpen = false;   // whether left palm is open (show/hide palm bubbles)
   }
 
   async loadFiles(dirPath) {
@@ -147,12 +152,14 @@ class FileBubbleManager {
   // ── Live file watching ──
 
   _startWatching(dirPath) {
+    const gen = ++this._watchGen;
     // Try WebSocket first
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${proto}//${location.host}/api/companion/ws/files/watch?path=${encodeURIComponent(dirPath)}`;
     try {
       this._watchWs = new WebSocket(wsUrl);
       this._watchWs.onmessage = (ev) => {
+        if (gen !== this._watchGen) return; // stale
         try {
           const msg = JSON.parse(ev.data);
           if (msg.event === 'change' && msg.path === this.currentPath) {
@@ -161,17 +168,18 @@ class FileBubbleManager {
         } catch {}
       };
       this._watchWs.onclose = () => {
-        // Fallback to polling if WS closes
+        if (gen !== this._watchGen) return; // stale — don't start poll for old path
         this._watchWs = null;
         this._startPolling(dirPath);
       };
       this._watchWs.onerror = () => {
+        if (gen !== this._watchGen) return; // stale
         this._watchWs?.close();
         this._watchWs = null;
         this._startPolling(dirPath);
       };
     } catch {
-      this._startPolling(dirPath);
+      if (gen === this._watchGen) this._startPolling(dirPath);
     }
   }
 
@@ -252,6 +260,7 @@ class FileBubbleManager {
   _removeAllBubbles() {
     this.fileBubbles.forEach(b => this._destroyBubble(b));
     this.fileBubbles.length = 0;
+    this.palmBubbles.length = 0;
     this._spawning.length = 0;
     this._removing.length = 0;
   }
@@ -360,11 +369,27 @@ class FileBubbleManager {
     }
 
     // Update live bubbles
+    const now = performance.now();
     for (const b of this.fileBubbles) {
       const ud = b.userData;
 
+      // ── MCP moveFileBubble: smooth position animation ──
+      if (ud._moveTarget) {
+        ud._moveT = Math.min(1, (ud._moveT || 0) + dt * 2.5);  // ~0.4s
+        const t = ud._moveT;
+        const ease = t * (2 - t);  // ease-out
+        const start = ud._moveStart;
+        b.position.lerpVectors(start, ud._moveTarget, ease);
+        ud.basePos.copy(b.position);
+        if (t >= 1) {
+          ud.basePos.copy(ud._moveTarget);
+          ud._moveTarget = null;
+          ud._moveStart = null;
+          ud._moveT = 0;
+        }
+      }
       // Smooth move to target position (when relayout happens)
-      if (ud.targetPos) {
+      else if (ud.targetPos) {
         b.position.x += (ud.targetPos.x - b.position.x) * Math.min(1, dt * 5);
         b.position.z += (ud.targetPos.z - b.position.z) * Math.min(1, dt * 5);
         ud.basePos.x = b.position.x;
@@ -375,9 +400,34 @@ class FileBubbleManager {
         }
       }
 
-      // Bobbing
-      const bobY = ud.basePos.y + Math.sin(elapsed * ud.bobSpeed) * ud.bobAmp;
-      b.position.y = bobY;
+      // Bobbing (skip during MCP move)
+      if (!ud._moveTarget) {
+        b.position.y = ud.basePos.y + Math.sin(elapsed * ud.bobSpeed) * ud.bobAmp;
+      }
+
+      // ── MCP pulse highlight animation ──
+      if (ud._pulseColor && ud._pulseEnd) {
+        if (now < ud._pulseEnd) {
+          const pulseT = Math.sin(now * 0.008) * 0.5 + 0.5;  // 0..1 oscillation
+          if (ud.glowRingMat) {
+            ud.glowRingMat.opacity = 0.3 + pulseT * 0.5;
+          }
+          // Subtle scale pulse
+          ud.scaleTarget = 1.15 + pulseT * 0.35;
+        } else {
+          ud._pulseColor = null;
+          ud._pulseEnd = null;
+        }
+      }
+
+      // ── Scale damping (spring-like) ──
+      if (ud.scaleTarget !== undefined) {
+        const cs = ud.cardSprite ? ud.cardSprite.scale.x / ud.cardW : 1;
+        const ns = cs + (ud.scaleTarget - cs) * 0.12;
+        const scale = ns * ud.cardW;
+        if (ud.cardSprite) ud.cardSprite.scale.set(scale, scale, 1);
+        if (ud.labelSprite) ud.labelSprite.scale.set(ud.cardW * 2.2 * ns, ud.cardW * 0.42 * ns, 1);
+      }
 
       // Sync child sprites with group position
       if (ud.cardSprite) {
@@ -393,13 +443,33 @@ class FileBubbleManager {
     }
   }
 
+  /**
+   * Update left palm tracking state (called from scene.js each frame).
+   */
+  updatePalm(palmCenter, palmOpen) {
+    this.leftPalmCenter = palmCenter;
+    this.leftPalmOpen = palmOpen;
+    // Show/hide palm bubbles based on palm state
+    for (const b of this.palmBubbles) {
+      if (b.userData.cardSprite) b.userData.cardSprite.visible = palmOpen;
+      if (b.userData.labelSprite) b.userData.labelSprite.visible = palmOpen;
+      if (b.userData.glowRing) b.userData.glowRing.visible = palmOpen;
+    }
+  }
+
   handlePinch(pinchPoint) {
+    // Iron Man style: pinch directly opens file / navigates folder
+    let closest = null, cd = 0.12;
     for (const b of this.fileBubbles) {
-      const dist = pinchPoint.distanceTo(b.position);
-      if (dist < 0.08) {
-        this._openBubble(b);
-        return true;
-      }
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
+    }
+    if (closest) {
+      // Quick pulse feedback before opening
+      closest.userData.scaleTarget = 1.3;
+      setTimeout(() => { if (closest.userData) closest.userData.scaleTarget = 1; }, 200);
+      this._openBubble(closest, pinchPoint);
+      return true;
     }
     return false;
   }
@@ -432,13 +502,12 @@ class FileBubbleManager {
     }
   }
 
-  async _openBubble(bubble) {
+  async _openBubble(bubble, pinchPoint) {
     const fd = bubble.userData.fileData;
     if (!fd) return;
 
     if (fd.type === 'folder') {
       if (fd._isBack || fd.name === '..') {
-        // Navigate up
         const parts = this.currentPath.split('/');
         parts.pop();
         this.loadFiles(parts.length ? parts.join('/') : '.');
@@ -448,7 +517,7 @@ class FileBubbleManager {
       return;
     }
 
-    // Mark opened
+    // Mark opened — glow ring highlight
     if (this.openedBubble && this.openedBubble !== bubble) {
       this.openedBubble.userData.opened = false;
       if (this.openedBubble.userData.glowRingMat) this.openedBubble.userData.glowRingMat.opacity = 0;
@@ -461,6 +530,11 @@ class FileBubbleManager {
     }
     this.openedBubble = bubble;
 
+    // Position: open the panel right at the bubble (Iron Man style)
+    const pos = bubble.position.clone();
+    // Nudge slightly toward user so it doesn't overlap the bubble
+    pos.z += 0.15;
+
     try {
       const fp = this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name;
       const res = await fetch('/api/companion/files/read', {
@@ -470,36 +544,139 @@ class FileBubbleManager {
       });
       const data = await res.json();
       const content = data.content || '// empty';
-      this._showFileInWindow(fd.name, content);
-      // Trigger CodeCity analysis for code files
+      this._showFileInWindow(fd.name, content, pos);
       const ext = _ext(fd);
       if (this.codeCity && CODE_EXTS.has(ext)) {
         this.codeCity.analyzeCode(content, ext, fd.name);
       }
     } catch (e) {
-      this._showFileInWindow(fd.name, '// could not read file\n// ' + e.message);
+      this._showFileInWindow(fd.name, '// could not read file\n// ' + e.message, pos);
     }
   }
 
-  _showFileInWindow(filename, content) {
-    if (this._fileWindow) this._fileWindow.close();
-    this._fileWindow = this.wm.createWindow({
+  _showFileInWindow(filename, content, position) {
+    // Don't close previous — allow multiple panels open (Iron Man multi-panel)
+    const pos = position ? [position.x, position.y, position.z] : [0.4, 1.4, -0.7];
+    const win = this.wm.createWindow({
       title: filename.toUpperCase(),
       width: 0.5,
       height: 0.4,
-      position: [0.4, 1.4, -0.7],
+      position: pos,
+      canvasWidth: 512,
+      canvasHeight: 400,
+      closable: true,
       content: (ctx, w, h) => {
         ctx.fillStyle = '#0a0a0a';
         ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = '#e0e0e0';
+
+        // Holographic scan-line overlay
+        ctx.strokeStyle = 'rgba(255, 112, 0, 0.04)';
+        for (let y = 0; y < h; y += 3) {
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        }
+
+        // Syntax-colored code
         ctx.font = '13px monospace';
         const lines = content.split('\n');
         const maxLines = Math.floor((h - 20) / 16);
         for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-          ctx.fillText(lines[i].substring(0, 60), 10, 18 + i * 16);
+          const line = lines[i].substring(0, 60);
+          // Simple syntax coloring
+          if (/^\s*(\/\/|#|--|\*)/.test(line)) {
+            ctx.fillStyle = '#666'; // comments
+          } else if (/^\s*(import|from|export|const|let|var|function|class|def|return|if|else|for|while)\b/.test(line)) {
+            ctx.fillStyle = '#FF7000'; // keywords → Mistral orange
+          } else if (/"[^"]*"|'[^']*'|`[^`]*`/.test(line)) {
+            ctx.fillStyle = '#50fa7b'; // strings → green
+          } else {
+            ctx.fillStyle = '#e0e0e0'; // default
+          }
+          ctx.fillText(line, 10, 18 + i * 16);
+        }
+
+        // Line numbers
+        ctx.fillStyle = 'rgba(255,112,0,0.3)';
+        ctx.font = '11px monospace';
+        for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
+          ctx.fillText(String(i + 1).padStart(3), 490, 18 + i * 16);
         }
       }
     });
+    this._fileWindow = win;
+  }
+
+  // ── MCP Scene Control Methods ────────────────────────
+
+  _findBubbleByPath(filePath) {
+    // Match by full path or just filename
+    const name = filePath.split('/').pop();
+    return this.fileBubbles.find(b => {
+      const fd = b.userData.fileData;
+      if (!fd) return false;
+      return fd.name === name || fd.name === filePath;
+    });
+  }
+
+  highlightFile(filePath, color, pulse) {
+    const bubble = this._findBubbleByPath(filePath);
+    if (!bubble) return;
+
+    const hexColor = typeof color === 'string' ? parseInt(color.replace('#', ''), 16) : 0xFF7000;
+    // Glow ring
+    if (bubble.userData.glowRingMat) {
+      bubble.userData.glowRingMat.color.setHex(hexColor);
+      bubble.userData.glowRingMat.opacity = 0.7;
+    }
+    // Scale bump
+    bubble.userData.scaleTarget = 1.5;
+    if (pulse) {
+      bubble.userData._pulseColor = hexColor;
+      bubble.userData._pulseEnd = performance.now() + 3000;
+    }
+    // Reset after 4s
+    setTimeout(() => {
+      if (bubble.userData.glowRingMat) bubble.userData.glowRingMat.opacity = 0;
+      bubble.userData.scaleTarget = 1;
+      bubble.userData._pulseColor = null;
+    }, 4000);
+  }
+
+  showFileChange(filePath, action, summary) {
+    // Navigate to the folder containing the file
+    const parts = filePath.split('/');
+    const filename = parts.pop();
+    const folder = parts.length ? parts.join('/') : '.';
+
+    // If we're not already in that folder, navigate there
+    if (folder !== this.currentPath) {
+      this.loadFiles(folder);
+      // After load, highlight the file
+      setTimeout(() => this.highlightFile(filename,
+        action === 'create' ? '#22C55E' : action === 'delete' ? '#EF4444' : '#FF7000',
+        true
+      ), 800);
+    } else {
+      this.highlightFile(filename,
+        action === 'create' ? '#22C55E' : action === 'delete' ? '#EF4444' : '#FF7000',
+        true
+      );
+    }
+
+    // For creates, reload to show new file
+    if (action === 'create') {
+      setTimeout(() => this.loadFiles(folder), 500);
+    }
+    // For deletes, the polling will catch the removal
+  }
+
+  moveFileBubble(filePath, position) {
+    const bubble = this._findBubbleByPath(filePath);
+    if (!bubble || !position) return;
+    // Smooth animate to target position
+    const target = new THREE.Vector3(position[0], position[1], position[2]);
+    bubble.userData._moveTarget = target;
+    bubble.userData._moveStart = bubble.position.clone();
+    bubble.userData._moveT = 0;
   }
 }
 
