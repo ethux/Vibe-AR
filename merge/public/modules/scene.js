@@ -257,6 +257,14 @@ export function initScene() {
           const now = performance.now();
           const handedness = src.handedness || (handIdx === 0 ? 'left' : 'right');
 
+          // ── Left hand palm tracking → file bubble orbit ──
+          if (handedness === 'left') {
+            const leftPalm = htDetectPalmOpen(src, frame, ref, handedness, renderer);
+            const palmCenter = leftPalm.palmCenter ? leftPalm.palmCenter.clone() : null;
+            if (palmCenter) palmCenter.y += 0.05;
+            bubbleMgr.updatePalm(palmCenter, leftPalm.open);
+          }
+
           if (handedness === 'right') {
             const palmResult = htDetectPalmOpen(src, frame, ref, handedness, renderer);
             s.palmOpen = palmResult.open;

@@ -258,6 +258,51 @@ def scene_run_terminal_command(command: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
+#  File Visualization — show file activity in AR
+# ═══════════════════════════════════════════════════════════
+
+@mcp.tool()
+def scene_browse_folder(folder_path: str = ".") -> str:
+    """Navigate the AR file bubble view to show a specific folder's contents. The user will see the folder's files as floating bubbles."""
+    result = _send_scene_command("browse_folder", {
+        "path": folder_path,
+    })
+    return json.dumps(result)
+
+
+@mcp.tool()
+def scene_highlight_file(file_path: str, color: str = "#FF7000", pulse: bool = True) -> str:
+    """Highlight a file bubble in the AR view to draw the user's attention. Use when reading, editing, or creating a file so the user can see what you're working on. Colors: #FF7000 orange, #22C55E green (created/success), #EF4444 red (error/deleted), #3B82F6 blue (reading), #A855F7 purple."""
+    result = _send_scene_command("highlight_file", {
+        "path": file_path,
+        "color": color,
+        "pulse": pulse,
+    })
+    return json.dumps(result)
+
+
+@mcp.tool()
+def scene_show_file_change(file_path: str, action: str = "edit", summary: str = "") -> str:
+    """Show a visual indicator in AR when a file is created, edited, moved, or deleted. action: 'create', 'edit', 'move', 'delete'. summary: brief description of the change."""
+    result = _send_scene_command("file_change", {
+        "path": file_path,
+        "action": action,
+        "summary": summary,
+    })
+    return json.dumps(result)
+
+
+@mcp.tool()
+def scene_move_file_bubble(file_path: str, x: float = 0.0, y: float = 1.4, z: float = -0.5) -> str:
+    """Move a file bubble to a specific 3D position in the AR scene. Useful for organizing files visually or bringing important files closer to the user."""
+    result = _send_scene_command("move_file_bubble", {
+        "path": file_path,
+        "position": [x, y, z],
+    })
+    return json.dumps(result)
+
+
+# ═══════════════════════════════════════════════════════════
 #  Resources — provide context about the repo
 # ═══════════════════════════════════════════════════════════
 

@@ -14,6 +14,7 @@ import mistralProxyRoutes from './routes/mistral-proxy.js';
 import companionProxyRoutes, { companionProxy } from './routes/companion-proxy.js';
 import codecityProxyRoutes from './routes/codecity-proxy.js';
 import sceneControlRoutes, { setupSceneControlWs } from './routes/scene-control.js';
+import gitRoutes from './routes/git.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -44,6 +45,7 @@ app.use(mistralProxyRoutes);
 app.use(companionProxyRoutes);
 app.use(codecityProxyRoutes);
 app.use(sceneControlRoutes);
+app.use(gitRoutes);
 
 // Catch-all error logging
 app.use((err, req, res, next) => {
