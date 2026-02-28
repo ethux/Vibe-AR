@@ -4,6 +4,25 @@ import { log } from './logging.js';
 
 let ttsSpeaking = false;
 let lastSeenTs = 0;  // timestamp of last response we already spoke
+let currentAudioCtx = null;  // track active AudioContext for stop
+let currentReader = null;    // track active stream reader for stop
+
+export function isTtsSpeaking() { return ttsSpeaking; }
+
+/** Immediately stop any TTS playback */
+export function stopTTS() {
+  if (!ttsSpeaking) return;
+  log('[TTS] Stopping playback (hand gesture)');
+  if (currentReader) {
+    try { currentReader.cancel(); } catch (_) {}
+    currentReader = null;
+  }
+  if (currentAudioCtx) {
+    try { currentAudioCtx.close(); } catch (_) {}
+    currentAudioCtx = null;
+  }
+  ttsSpeaking = false;
+}
 
 /**
  * Poll /api/latest-response until Vibe's response appears, then speak it.
@@ -85,10 +104,12 @@ async function speakTTS(text) {
     }
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_RATE });
+    currentAudioCtx = audioCtx;
     const gainNode = audioCtx.createGain();
     gainNode.gain.value = 3.0;
     gainNode.connect(audioCtx.destination);
     const reader = res.body.getReader();
+    currentReader = reader;
     let nextTime = audioCtx.currentTime;
     let leftover = new Uint8Array(0);
 
@@ -119,10 +140,17 @@ async function speakTTS(text) {
     }
 
     const remaining = nextTime - audioCtx.currentTime;
-    setTimeout(() => { ttsSpeaking = false; audioCtx.close(); }, Math.max(0, remaining * 1000) + 200);
+    setTimeout(() => {
+      ttsSpeaking = false;
+      currentAudioCtx = null;
+      currentReader = null;
+      audioCtx.close();
+    }, Math.max(0, remaining * 1000) + 200);
   } catch (e) {
     log(`[TTS] ${e.message}`);
     ttsSpeaking = false;
+    currentAudioCtx = null;
+    currentReader = null;
   }
 }
 
