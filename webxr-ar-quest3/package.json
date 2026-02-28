@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node --test test/"
+    "test": "node --test 'test/**/*.test.js'"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

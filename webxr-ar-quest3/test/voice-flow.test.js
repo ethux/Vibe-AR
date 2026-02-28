@@ -1,14 +1,29 @@
 // Voice flow integration tests: STT → Chat → TTS
-// Uses Node built-in test runner + mocked fetch to avoid hitting real APIs
-import { describe, it, before, after, beforeEach, mock } from 'node:test';
+// Uses Node built-in test runner + mocked fetch for external APIs
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createServer } from 'node:http';
 
-// ─── Build a minimal Express app with the routes under test ───
 import chatRoutes from '../server/routes/chat.js';
 import transcribeRoutes from '../server/routes/transcribe.js';
 import ttsRoutes from '../server/routes/tts.js';
+
+// Save the real fetch — used for test HTTP calls to local server
+const realFetch = globalThis.fetch;
+
+// Mock that only intercepts external API calls, passes local through
+let externalMock = null;
+function mockExternal(handler) {
+  externalMock = handler;
+  globalThis.fetch = async (url, opts) => {
+    const u = typeof url === 'string' ? url : url.toString();
+    // Local requests → real fetch
+    if (u.startsWith('http://127.0.0.1')) return realFetch(url, opts);
+    // External → mock
+    return handler(u, opts);
+  };
+}
 
 function buildApp() {
   const app = express();
@@ -27,41 +42,38 @@ function listen(app) {
 }
 
 function baseUrl(server) {
-  const { port } = server.address();
-  return `http://127.0.0.1:${port}`;
+  return `http://127.0.0.1:${server.address().port}`;
 }
 
 // ─── Tests ───
 
 describe('/api/chat', () => {
-  let server, url, originalFetch;
+  let server, url;
 
   before(async () => {
     process.env.MISTRAL_API_KEY = 'test-key-123';
-    originalFetch = globalThis.fetch;
     server = await listen(buildApp());
     url = baseUrl(server);
   });
-  after(() => { server.close(); globalThis.fetch = originalFetch; });
+  after(() => { server.close(); globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; });
 
   it('forwards messages to Mistral and returns the response', async () => {
     const mockResponse = {
       choices: [{ message: { role: 'assistant', content: 'Hello there!' } }],
     };
-    globalThis.fetch = mock.fn(async (reqUrl, opts) => {
-      if (reqUrl === 'https://api.mistral.ai/v1/chat/completions') {
-        const body = JSON.parse(opts.body);
-        assert.equal(body.model, 'mistral-small-latest');
-        assert.equal(body.messages.length, 2);
-        assert.equal(opts.headers['Authorization'], 'Bearer test-key-123');
-        return new Response(JSON.stringify(mockResponse), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${reqUrl}`);
+    mockExternal(async (reqUrl, opts) => {
+      assert.match(reqUrl, /mistral\.ai.*chat\/completions/);
+      const body = JSON.parse(opts.body);
+      assert.equal(body.model, 'mistral-small-latest');
+      assert.equal(body.messages.length, 2);
+      assert.equal(opts.headers['Authorization'], 'Bearer test-key-123');
+      return new Response(JSON.stringify(mockResponse), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     });
 
-    const res = await fetch(`${url}/api/chat`, {
+    const res = await realFetch(`${url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -78,7 +90,7 @@ describe('/api/chat', () => {
   });
 
   it('uses default model/max_tokens/temperature when not provided', async () => {
-    globalThis.fetch = mock.fn(async (reqUrl, opts) => {
+    mockExternal(async (reqUrl, opts) => {
       const body = JSON.parse(opts.body);
       assert.equal(body.model, 'mistral-small-latest');
       assert.equal(body.max_tokens, 200);
@@ -88,7 +100,7 @@ describe('/api/chat', () => {
       });
     });
 
-    const res = await fetch(`${url}/api/chat`, {
+    const res = await realFetch(`${url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
@@ -97,9 +109,9 @@ describe('/api/chat', () => {
   });
 
   it('returns 500 when Mistral API throws', async () => {
-    globalThis.fetch = mock.fn(async () => { throw new Error('network down'); });
+    mockExternal(async () => { throw new Error('network down'); });
 
-    const res = await fetch(`${url}/api/chat`, {
+    const res = await realFetch(`${url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
@@ -111,32 +123,29 @@ describe('/api/chat', () => {
 });
 
 describe('/api/transcribe', () => {
-  let server, url, originalFetch;
+  let server, url;
 
   before(async () => {
     process.env.MISTRAL_API_KEY = 'test-key-123';
-    originalFetch = globalThis.fetch;
     server = await listen(buildApp());
     url = baseUrl(server);
   });
-  after(() => { server.close(); globalThis.fetch = originalFetch; });
+  after(() => { server.close(); globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; });
 
   it('sends audio to Voxtral and returns transcription', async () => {
     const fakeAudio = Buffer.from('fake audio data').toString('base64');
 
-    globalThis.fetch = mock.fn(async (reqUrl, opts) => {
-      if (reqUrl === 'https://api.mistral.ai/v1/audio/transcriptions') {
-        assert.equal(opts.headers['Authorization'], 'Bearer test-key-123');
-        // FormData body — just check it exists
-        assert.ok(opts.body);
-        return new Response(JSON.stringify({ text: 'Hello world' }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${reqUrl}`);
+    mockExternal(async (reqUrl, opts) => {
+      assert.match(reqUrl, /mistral\.ai.*audio\/transcriptions/);
+      assert.equal(opts.headers['Authorization'], 'Bearer test-key-123');
+      assert.ok(opts.body); // FormData
+      return new Response(JSON.stringify({ text: 'Hello world' }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     });
 
-    const res = await fetch(`${url}/api/transcribe`, {
+    const res = await realFetch(`${url}/api/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: fakeAudio, mimeType: 'audio/webm' }),
@@ -148,9 +157,9 @@ describe('/api/transcribe', () => {
   });
 
   it('returns 500 when Mistral STT throws', async () => {
-    globalThis.fetch = mock.fn(async () => { throw new Error('STT failed'); });
+    mockExternal(async () => { throw new Error('STT failed'); });
 
-    const res = await fetch(`${url}/api/transcribe`, {
+    const res = await realFetch(`${url}/api/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: 'aGVsbG8=', mimeType: 'audio/webm' }),
@@ -160,19 +169,19 @@ describe('/api/transcribe', () => {
 });
 
 describe('/api/tts', () => {
-  let server, url, originalFetch;
+  let server, url;
 
   before(async () => {
-    originalFetch = globalThis.fetch;
     server = await listen(buildApp());
     url = baseUrl(server);
   });
-  after(() => { server.close(); globalThis.fetch = originalFetch; });
+  after(() => { server.close(); globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; });
 
   it('returns 501 when ELEVENLABS_API_KEY is not set', async () => {
     delete process.env.ELEVENLABS_API_KEY;
 
-    const res = await fetch(`${url}/api/tts`, {
+    const res = await realFetch(`${url}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Hello' }),
@@ -186,21 +195,19 @@ describe('/api/tts', () => {
     process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
     const fakePCM = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
 
-    globalThis.fetch = mock.fn(async (reqUrl, opts) => {
-      if (reqUrl.includes('api.elevenlabs.io')) {
-        assert.equal(opts.headers['xi-api-key'], 'test-eleven-key');
-        const body = JSON.parse(opts.body);
-        assert.equal(body.text, 'Hello world');
-        assert.equal(body.model_id, 'eleven_flash_v2_5');
-        return new Response(fakePCM, {
-          status: 200,
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${reqUrl}`);
+    mockExternal(async (reqUrl, opts) => {
+      assert.match(reqUrl, /elevenlabs\.io/);
+      assert.equal(opts.headers['xi-api-key'], 'test-eleven-key');
+      const body = JSON.parse(opts.body);
+      assert.equal(body.text, 'Hello world');
+      assert.equal(body.model_id, 'eleven_flash_v2_5');
+      return new Response(fakePCM, {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
     });
 
-    const res = await fetch(`${url}/api/tts`, {
+    const res = await realFetch(`${url}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Hello world' }),
@@ -211,15 +218,16 @@ describe('/api/tts', () => {
     assert.ok(buf.length > 0);
   });
 
-  it('uses default voice_id when not provided', async () => {
+  it('uses default voice_id (21m00Tcm4TlvDq8ikWAM)', async () => {
     process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
 
-    globalThis.fetch = mock.fn(async (reqUrl) => {
+    mockExternal(async (reqUrl) => {
+      // The voice_id is in the URL path
       assert.match(reqUrl, /21m00Tcm4TlvDq8ikWAM/);
       return new Response(new Uint8Array(0), { status: 200 });
     });
 
-    const res = await fetch(`${url}/api/tts`, {
+    const res = await realFetch(`${url}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'hi' }),
@@ -230,11 +238,9 @@ describe('/api/tts', () => {
   it('forwards ElevenLabs error status', async () => {
     process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
 
-    globalThis.fetch = mock.fn(async () => {
-      return new Response('rate limited', { status: 429 });
-    });
+    mockExternal(async () => new Response('rate limited', { status: 429 }));
 
-    const res = await fetch(`${url}/api/tts`, {
+    const res = await realFetch(`${url}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'hi' }),
@@ -244,21 +250,21 @@ describe('/api/tts', () => {
 });
 
 describe('Full voice flow: STT → Chat → TTS', () => {
-  let server, url, originalFetch, callLog;
+  let server, url;
 
   before(async () => {
     process.env.MISTRAL_API_KEY = 'test-key-123';
     process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
-    originalFetch = globalThis.fetch;
     server = await listen(buildApp());
     url = baseUrl(server);
   });
-  after(() => { server.close(); globalThis.fetch = originalFetch; });
-
-  beforeEach(() => { callLog = []; });
+  after(() => { server.close(); globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; });
 
   it('completes the full pipeline: transcribe → chat → tts', async () => {
-    globalThis.fetch = mock.fn(async (reqUrl, opts) => {
+    const callLog = [];
+
+    mockExternal(async (reqUrl, opts) => {
       if (reqUrl.includes('audio/transcriptions')) {
         callLog.push('transcribe');
         return new Response(JSON.stringify({ text: 'Create a hello world app' }), {
@@ -279,11 +285,11 @@ describe('Full voice flow: STT → Chat → TTS', () => {
         assert.match(body.text, /hello world application/);
         return new Response(new Uint8Array([0, 1, 2, 3]), { status: 200 });
       }
-      throw new Error(`Unexpected: ${reqUrl}`);
+      throw new Error(`Unexpected external call: ${reqUrl}`);
     });
 
     // Step 1: Transcribe audio
-    const sttRes = await fetch(`${url}/api/transcribe`, {
+    const sttRes = await realFetch(`${url}/api/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio: Buffer.from('fake').toString('base64') }),
@@ -292,7 +298,7 @@ describe('Full voice flow: STT → Chat → TTS', () => {
     assert.equal(userText, 'Create a hello world app');
 
     // Step 2: Get chat reply (what speakReply does)
-    const chatRes = await fetch(`${url}/api/chat`, {
+    const chatRes = await realFetch(`${url}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -309,7 +315,7 @@ describe('Full voice flow: STT → Chat → TTS', () => {
     assert.match(reply, /hello world/);
 
     // Step 3: Speak it
-    const ttsRes = await fetch(`${url}/api/tts`, {
+    const ttsRes = await realFetch(`${url}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: reply }),
