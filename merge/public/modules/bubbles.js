@@ -400,8 +400,19 @@ class FileBubbleManager {
         }
       }
 
-      // Bobbing (skip during MCP move)
-      if (!ud._moveTarget) {
+      // Palm orbit — move inPalm bubbles around leftPalmCenter
+      if (ud.inPalm && this.leftPalmCenter) {
+        const total = Math.max(this.palmBubbles.length, 1);
+        const r     = 0.07 + total * 0.018;
+        const angle = elapsed * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
+        const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
+        b.position.lerp(new THREE.Vector3(
+          this.leftPalmCenter.x + Math.cos(angle) * r,
+          this.leftPalmCenter.y + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
+          this.leftPalmCenter.z + Math.sin(angle) * Math.cos(tilt) * r
+        ), 0.15);
+      } else if (!ud.inPalm && !ud._moveTarget) {
+        // Bobbing (only for free bubbles, skip during MCP move)
         b.position.y = ud.basePos.y + Math.sin(elapsed * ud.bobSpeed) * ud.bobAmp;
       }
 
