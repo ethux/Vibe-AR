@@ -32,6 +32,17 @@ class WindowManager {
       startPoint: new THREE.Vector3(),
       startWidth: 0, startHeight: 0, startPos: new THREE.Vector3(),
     };
+
+    // Cursor (transparent circle shown on window surface instead of laser)
+    const cursorGeo = new THREE.RingGeometry(0.008, 0.012, 32);
+    const cursorMat = new THREE.MeshBasicMaterial({
+      color: 0xFF7000, transparent: true, opacity: 0.6,
+      side: THREE.DoubleSide, depthTest: false,
+    });
+    this._cursor = new THREE.Mesh(cursorGeo, cursorMat);
+    this._cursor.visible = false;
+    this._cursor.renderOrder = 9999;
+    scene.add(this._cursor);
   }
 
   createWindow(opts = {}) {
@@ -214,6 +225,8 @@ class WindowManager {
   // ── Per-frame update ───────────────────────────────────────────
 
   update(frame, dt, elapsed, controllers, activeCamera) {
+    // Cursor + ray visibility: raycast controllers against windows
+    let cursorPlaced = false;
     if (controllers) {
       this.windows.forEach(w => { w.hoverTarget = null; });
       for (const ctrl of controllers) {
@@ -225,8 +238,43 @@ class WindowManager {
           if (win.closed || !win.visible) continue;
           this._detectHover(win);
         }
+
+        // Raycast against all window meshes for cursor placement
+        if (!cursorPlaced) {
+          const allMeshes = [];
+          for (const win of this.windows) {
+            if (win.closed || !win.visible) continue;
+            allMeshes.push(...win.getInteractableMeshes());
+          }
+          const hits = this._raycaster.intersectObjects(allMeshes, false);
+          if (hits.length > 0) {
+            cursorPlaced = true;
+            this._cursor.visible = true;
+            this._cursor.position.copy(hits[0].point);
+            // Find which window was hit and match its orientation
+            const hitObj = hits[0].object;
+            for (const win of this.windows) {
+              if (win.closed || !win.visible) continue;
+              if (win.getInteractableMeshes().includes(hitObj)) {
+                this._cursor.quaternion.copy(win.root.quaternion);
+                break;
+              }
+            }
+            // Offset forward slightly to prevent z-fighting
+            const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this._cursor.quaternion);
+            this._cursor.position.addScaledVector(fwd, 0.002);
+            // Hide the ray line on this controller
+            const ray = ctrl.children.find(c => c.isLine);
+            if (ray) ray.visible = false;
+          } else {
+            // No hit — show ray
+            const ray = ctrl.children.find(c => c.isLine);
+            if (ray) ray.visible = true;
+          }
+        }
       }
     }
+    if (!cursorPlaced) this._cursor.visible = false;
 
     if (this._controllerDragWindow && this._controllerDragCtrl) {
       const win = this._controllerDragWindow, ctrl = this._controllerDragCtrl;
@@ -250,11 +298,16 @@ class WindowManager {
       this._updateResize(currentPoint);
     }
 
-    // Billboard: make dragged windows face the camera (orthogonal to camera normal)
+    // Billboard: make dragged windows face the camera (yaw only, no head tilt)
     const cam = activeCamera || this.camera;
+    const camPos = new THREE.Vector3();
+    cam.getWorldPosition(camPos);
     for (const win of this.windows) {
       if (!win.closed && win.visible && win.dragging) {
-        win.root.quaternion.copy(cam.quaternion);
+        // Look at camera position but keep world-up so no roll/tilt
+        const winPos = win.root.position;
+        const lookTarget = new THREE.Vector3(camPos.x, winPos.y, camPos.z);
+        win.root.lookAt(lookTarget);
       }
     }
 
