@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebXR AR Draggable Window</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+    canvas { display: block; }
+
+    #overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 10; pointer-events: none;
+    }
+
+    #enter-vr {
+      pointer-events: auto;
+      padding: 16px 32px;
+      font-size: 18px;
+      background: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+      transition: background 0.2s;
+    }
+    #enter-vr:hover { background: #1558b0; }
+    #enter-vr:disabled { background: #555; cursor: not-allowed; }
+
+    #info {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      color: #aaa; font-size: 14px; z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <button id="enter-vr">Enter AR</button>
+  </div>
+  <div id="info">Open your palm for a bubble ✋ • Pinch title bar to drag 🤏 • Controllers work too 🎮</div>
+
+  <!-- Three.js r160 -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- VRButton helper (we roll our own below) -->
+  <script src="app.js"></script>
+</body>
+</html>
