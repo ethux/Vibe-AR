@@ -318,11 +318,8 @@ export function initScene() {
               const isFolder = _draggedBubble.userData.fileData?.type === 'folder';
               if (!isFolder && dz > DRAG_OPEN_THRESHOLD) {
                 bubbleMgr.openBubble(_draggedBubble);           // file: pull toward self → open
-              } else if (dz < DRAG_BACK_THRESHOLD) {
-                _draggedBubble.position.copy(_dragOriginalPos);
-                bubbleMgr.navigateBack();                       // push away → go back
               } else {
-                _draggedBubble.position.copy(_dragOriginalPos); // small move or folder → cancel
+                _draggedBubble.position.copy(_dragOriginalPos); // anything else → cancel
                 _draggedBubble.userData.scaleTarget = 1;
               }
               _draggedBubble = null;
