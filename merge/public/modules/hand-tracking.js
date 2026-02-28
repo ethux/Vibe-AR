@@ -102,13 +102,16 @@ function detectPointing(inputSource, frame, refSpace) {
   const pinkyTip   = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
   const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
   const thumbTip   = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
-  if (!wrist || !indexTip || !indexProx || !middleTip || !ringTip || !pinkyTip)
+  if (!wrist || !indexTip || !indexProx || !middleTip || !middleProx || !ringTip || !ringProx || !pinkyTip || !pinkyProx)
     return false;
-  const indexExtended = indexTip.distanceTo(wrist) > indexProx.distanceTo(wrist) * 1.1;
-  const middleCurled  = middleProx ? middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 1.05 : true;
-  const ringCurled    = ringProx   ? ringTip.distanceTo(wrist)   < ringProx.distanceTo(wrist)   * 1.05 : true;
-  const pinkyCurled   = pinkyProx  ? pinkyTip.distanceTo(wrist)  < pinkyProx.distanceTo(wrist)  * 1.05 : true;
-  const notPinching   = thumbTip   ? thumbTip.distanceTo(indexTip) > 0.03 : true;
+  // Index clearly extended (1.5x to avoid false triggers with half-bent finger)
+  const indexExtended = indexTip.distanceTo(wrist) > indexProx.distanceTo(wrist) * 1.5;
+  // Middle, ring, pinky clearly curled (tip close to proximal distance)
+  const middleCurled = middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 1.2;
+  const ringCurled   = ringTip.distanceTo(wrist)   < ringProx.distanceTo(wrist)   * 1.2;
+  const pinkyCurled  = pinkyTip.distanceTo(wrist)  < pinkyProx.distanceTo(wrist)  * 1.2;
+  // Thumb clearly NOT pinching index (4cm gap vs 2.5cm pinch threshold)
+  const notPinching  = thumbTip ? thumbTip.distanceTo(indexTip) > 0.045 : true;
   return indexExtended && middleCurled && ringCurled && pinkyCurled && notPinching;
 }
 
