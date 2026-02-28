@@ -3,6 +3,10 @@ import { getTerm, setTerm, getTermWs, setTermWs } from './state.js';
 import { log, setStatus } from './logging.js';
 import { onTermOutput } from './tts.js';
 
+// Terminal output listeners (for live-preview, etc.)
+const _termOutputListeners = [];
+export function addTermOutputListener(fn) { _termOutputListeners.push(fn); }
+
 export async function initTerminal() {
   setStatus('Connecting to terminal...');
 
@@ -74,7 +78,7 @@ export async function initTerminal() {
       switch (cmd) {
         case '0': // OUTPUT
           term.write(payload);
-          onTermOutput(textDecoder.decode(payload));
+          { const txt = textDecoder.decode(payload); onTermOutput(txt); for (const fn of _termOutputListeners) fn(txt); }
           break;
         case '1': // SET_WINDOW_TITLE
           document.title = textDecoder.decode(payload);

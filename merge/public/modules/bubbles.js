@@ -129,6 +129,11 @@ class FileBubbleManager {
       entries = FALLBACK;
     }
 
+    // Prepend ".." back bubble when not at root
+    if (dirPath !== '.') {
+      entries = [{ name: '..', type: 'folder', _isBack: true }, ...entries];
+    }
+
     entries.forEach((e, i) => {
       const b = this._createBubble(e, i, entries.length);
       this._spawning.push({ bubble: b, progress: 0 });
@@ -410,12 +415,36 @@ class FileBubbleManager {
     return false;
   }
 
+  async openFile(filePath) {
+    // MCP-facing: open a file by path and show in window
+    const parts = filePath.split('/');
+    const filename = parts.pop();
+    try {
+      const res = await fetch('/api/companion/files/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath })
+      });
+      const data = await res.json();
+      this._showFileInWindow(filename, data.content || '// empty');
+    } catch (e) {
+      this._showFileInWindow(filename, '// could not read file\n// ' + e.message);
+    }
+  }
+
   async _openBubble(bubble) {
     const fd = bubble.userData.fileData;
     if (!fd) return;
 
     if (fd.type === 'folder') {
-      this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
+      if (fd._isBack || fd.name === '..') {
+        // Navigate up
+        const parts = this.currentPath.split('/');
+        parts.pop();
+        this.loadFiles(parts.length ? parts.join('/') : '.');
+      } else {
+        this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
+      }
       return;
     }
 

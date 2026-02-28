@@ -8,17 +8,23 @@ import { WindowManager } from './WindowManager.js';
 import { build3DKeyboard, toggleKb3D, handleKbKeyPress, getKbKeyMeshes, isKbVisible } from './keyboard3d.js';
 import { toggleMicFromBtn, setMicBtnMesh, startRecording, stopRecording, getIsRecording } from './voice.js';
 import { makeTextTexture } from './textures.js';
+import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './AnimationManager.js';
 import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
 import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
+import { GitTreeRenderer } from './git-tree.js';
+import { LivePreviewManager } from './live-preview.js';
+import { initSceneControl } from './scene-control.js';
 
 let scene, camera, clock;
 let wm, termWin, kbBtnMesh, micBtnMesh;
 let animMgr;  // mascot animation manager
 let codeCity;  // 3D code visualization
 let bubbleMgr; // file bubble browser
+let gitTree;   // 3D git history tree
+let livePreview; // dev server preview manager
 
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
@@ -63,6 +69,22 @@ export function initScene() {
   codeCity = new CodeCityRenderer(scene, camera, wm);
   bubbleMgr = new FileBubbleManager(scene, wm, codeCity);
   bubbleMgr.loadFiles('.');  // load root workspace files
+
+  // ── Git Tree (3D commit history) ──
+  gitTree = new GitTreeRenderer(scene, camera, wm);
+  gitTree.loadHistory();  // auto-load on init
+
+  // ── Live Preview (dev server detection) ──
+  livePreview = new LivePreviewManager(scene, wm);
+
+  // ── Live Preview: feed terminal output for server detection ──
+  addTermOutputListener((text) => {
+    const result = livePreview.detectServer(text);
+    if (result.detected) livePreview.openPreview(result.port, result.framework);
+  });
+
+  // ── Scene Control (MCP WebSocket bridge) ──
+  initSceneControl({ gitTree, bubbleMgr, codeCity, wm });
 
   // ── KB + MIC buttons on the title bar ──
   const titleY = termWin.getTitleBarYOffset();
@@ -212,6 +234,13 @@ export function initScene() {
                 }
                 if (hitKey) continue;
               }
+              // Check git tree
+              {
+                const tmpRay = new THREE.Raycaster();
+                tmpRay.ray.origin.copy(p.pinchPoint);
+                tmpRay.ray.direction.set(0, 0, -1);
+                if (gitTree.handleRaycast(tmpRay)) continue;
+              }
               // Check file bubbles
               if (bubbleMgr.handlePinch(p.pinchPoint)) continue;
               // Fall through to WindowManager
@@ -318,6 +347,12 @@ export function initScene() {
     // Update file bubbles (bobbing animation)
     bubbleMgr.update(dt, elapsed);
 
+    // Update git tree (glow pulse, HEAD particles)
+    gitTree.update(dt, elapsed);
+
+    // Update live preview (pulse animation)
+    livePreview.update(dt, elapsed);
+
     renderer.render(scene, camera);
   });
 
@@ -387,6 +422,8 @@ export function initScene() {
         }
       }
     }
+    // Git tree commits
+    if (gitTree.handleRaycast(mouseRaycaster)) return;
     // File bubbles
     if (bubbleMgr.handleRaycast(mouseRaycaster)) return;
   });

@@ -912,6 +912,88 @@ class GitTreeRenderer {
     });
   }
 
+  // ── MCP Scene Control Methods ─────────────────────────────────
+
+  highlightCommit(hash, color) {
+    if (!hash) return;
+    const hexColor = typeof color === 'string' ? parseInt(color.replace('#', ''), 16) : (color || ORANGE);
+    for (const cm of this.commitMeshes) {
+      if (cm.commit.hash.startsWith(hash) || cm.commit.shortHash === hash) {
+        if (cm.mesh.material) {
+          cm.mesh.material.color.setHex(hexColor);
+          cm.mesh.material.emissive.setHex(hexColor);
+        }
+        if (cm.glowMesh && cm.glowMesh.material) {
+          cm.glowMesh.material.color.setHex(hexColor);
+        }
+        break;
+      }
+    }
+  }
+
+  highlightBranch(branchName, color) {
+    if (!branchName) return;
+    const hexColor = typeof color === 'string' ? parseInt(color.replace('#', ''), 16) : (color || CYAN);
+    for (const cm of this.commitMeshes) {
+      if (cm.commit.branchNames.includes(branchName)) {
+        if (cm.mesh.material) {
+          cm.mesh.material.color.setHex(hexColor);
+          cm.mesh.material.emissive.setHex(hexColor);
+        }
+        if (cm.glowMesh && cm.glowMesh.material) {
+          cm.glowMesh.material.color.setHex(hexColor);
+        }
+      }
+    }
+  }
+
+  showCommitDetails(hash) {
+    if (!hash) return;
+    const entry = this.commitMeshes.find(
+      cm => cm.commit.hash.startsWith(hash) || cm.commit.shortHash === hash
+    );
+    if (entry) this._showCommitDetail(entry.commit);
+  }
+
+  navigateToCommit(hash) {
+    if (!hash) return;
+    const entry = this.commitMeshes.find(
+      cm => cm.commit.hash.startsWith(hash) || cm.commit.shortHash === hash
+    );
+    if (entry && entry.mesh) {
+      // Get world position of the commit sphere
+      const worldPos = new THREE.Vector3();
+      entry.mesh.getWorldPosition(worldPos);
+      // Smoothly shift the tree group so the commit is centered at eye level
+      const targetY = 1.4 - worldPos.y + this.treeGroup.position.y;
+      const startY = this.treeGroup.position.y;
+      const duration = 600;
+      const start = performance.now();
+      const animate = () => {
+        const t = Math.min((performance.now() - start) / duration, 1);
+        const ease = t * (2 - t); // ease-out
+        this.treeGroup.position.y = startY + (targetY - startY) * ease;
+        if (t < 1) requestAnimationFrame(animate);
+      };
+      animate();
+    }
+  }
+
+  clearHighlights() {
+    // Reset all commit colors to their original branch-based colors
+    for (const cm of this.commitMeshes) {
+      const isOnCurrent = cm.commit.isHead || cm.commit.branchNames.includes(this.currentBranch);
+      const baseColor = isOnCurrent ? ORANGE : CYAN;
+      if (cm.mesh.material) {
+        cm.mesh.material.color.setHex(baseColor);
+        cm.mesh.material.emissive.setHex(baseColor);
+      }
+      if (cm.glowMesh && cm.glowMesh.material) {
+        cm.glowMesh.material.color.setHex(baseColor);
+      }
+    }
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────
 
   clearTree() {
