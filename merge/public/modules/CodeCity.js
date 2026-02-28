@@ -98,20 +98,7 @@ class CodeCityRenderer {
   renderCity(layout) {
     this._layout = layout;
 
-    if (layout.districts) {
-      for (const d of layout.districts) {
-        const plateGeo = new THREE.PlaneGeometry(d.width || 1.5, d.depth || 1.5);
-        const plateMat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(d.color || '#333333'),
-          transparent: true, opacity: 0.3, roughness: 0.8, side: THREE.DoubleSide
-        });
-        const plate = new THREE.Mesh(plateGeo, plateMat);
-        plate.rotation.x = -Math.PI / 2;
-        plate.position.set(d.x || 0, 0, d.z || 0);
-        this.cityGroup.add(plate);
-        this.districtPlates.push(plate);
-      }
-    }
+    // District plates (floor) removed — city floats without a ground plane
 
     if (layout.buildings) {
       for (const b of layout.buildings) {
@@ -215,37 +202,54 @@ class CodeCityRenderer {
     });
   }
 
-  updateHover(controllers) {
-    if (!controllers || this.buildingMeshes.length === 0) return;
-    let closestDist = Infinity, closestEntry = null;
-    for (const ctrl of controllers) {
-      if (!ctrl || !ctrl.matrixWorld) continue;
-      this._tempMatrix.identity().extractRotation(ctrl.matrixWorld);
-      this._raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
-      this._raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this._tempMatrix);
-      const meshes = this.buildingMeshes.map(bm => bm.mesh);
-      const hits = this._raycaster.intersectObjects(meshes, false);
-      if (hits.length > 0 && hits[0].distance < closestDist) {
-        closestDist = hits[0].distance;
-        const bm = this.buildingMeshes.find(b => b.mesh === hits[0].object);
-        if (bm) closestEntry = bm.entry;
+  // fingerTips: array of { pos: THREE.Vector3, handedness: 'left'|'right' } for each hand's index finger tip
+  updateHover(fingerTips) {
+    if (!fingerTips || this.buildingMeshes.length === 0) return;
+    let closestDist = Infinity, closestEntry = null, touchingFingerPos = null;
+    const TOUCH_THRESHOLD = 0.05; // 5cm — finger must be very close to building
+
+    for (const ft of fingerTips) {
+      if (!ft || !ft.pos) continue;
+      // Convert finger world position into cityGroup local space
+      const localPos = ft.pos.clone();
+      this.cityGroup.worldToLocal(localPos);
+
+      for (const bm of this.buildingMeshes) {
+        const mesh = bm.mesh;
+        const b = bm.entry;
+        const hw = Math.max(0.08, b.width || 0.2) / 2;
+        const hh = Math.max(0.08, b.height || 0.3) / 2;
+        const hd = Math.max(0.08, b.depth || 0.2) / 2;
+        const mp = mesh.position;
+        // Distance from finger to building surface (axis-aligned box)
+        const dx = Math.max(0, Math.abs(localPos.x - mp.x) - hw);
+        const dy = Math.max(0, Math.abs(localPos.y - mp.y) - hh);
+        const dz = Math.max(0, Math.abs(localPos.z - mp.z) - hd);
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < TOUCH_THRESHOLD && dist < closestDist) {
+          closestDist = dist;
+          closestEntry = bm.entry;
+          touchingFingerPos = ft.pos; // world position of the touching finger
+        }
       }
     }
     const now = performance.now();
     if (closestEntry && closestEntry !== this._hoveredEntry) {
       this._hoveredEntry = closestEntry;
       this._hoverLockUntil = now + 500;
-      this._showTooltip(closestEntry);
+      this._showTooltip(closestEntry, touchingFingerPos);
+    } else if (closestEntry && closestEntry === this._hoveredEntry && touchingFingerPos) {
+      // Update tooltip position to follow finger
+      this._updateTooltipPosition(touchingFingerPos);
     } else if (!closestEntry && this._hoveredEntry && now > this._hoverLockUntil) {
       this._hoveredEntry = null;
       this._hideTooltip();
     }
   }
 
-  _showTooltip(entry) {
+  _showTooltip(entry, fingerPos) {
     this._hideTooltip();
-    const hp = this._rightHandPos;
-    const pos = hp ? [hp.x, hp.y + 0.12, hp.z] : [-0.5, 1.5, -0.8];
+    const pos = fingerPos ? [fingerPos.x, fingerPos.y + 0.06, fingerPos.z] : [-0.5, 1.5, -0.8];
     this._tooltipWindow = this.wm.createWindow({
       title: entry.name || 'BUILDING', width: 0.22, height: 0.12, position: pos,
       content: (ctx, w, h) => {
@@ -261,6 +265,12 @@ class CodeCityRenderer {
         }
       }
     });
+  }
+
+  _updateTooltipPosition(fingerPos) {
+    if (this._tooltipWindow && this._tooltipWindow.root) {
+      this._tooltipWindow.root.position.set(fingerPos.x, fingerPos.y + 0.06, fingerPos.z);
+    }
   }
 
   _hideTooltip() {

@@ -74,6 +74,24 @@ class WindowManager {
     // Two-hand pinch state (rotate + scale when both hands grab same window)
     this._twoHandAnchor = null;
 
+    // Content interaction state (per hand)
+    this._contentInteraction = [
+      { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
+      { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
+    ];
+
+    // Controller content interaction state
+    this._controllerContentState = {
+      active: false,
+      window: null,
+      controller: null,
+      startPoint: new THREE.Vector3(),
+      lastPoint: new THREE.Vector3(),
+      startTime: 0,
+      totalMove: 0,
+      startDist: 0,
+    };
+
     // Resize state
     this._resizeState = {
       active: false,
@@ -158,10 +176,52 @@ class WindowManager {
           return;
         }
       }
+
+      // Check content mesh for scroll/cursor (ray hit)
+      if (win.contentMesh && win.onContentInteraction) {
+        const contentHits = this._raycaster.intersectObject(win.contentMesh, false);
+        if (contentHits.length > 0) {
+          const hit = contentHits[0];
+          const invMatrix = new THREE.Matrix4().copy(win.contentMesh.matrixWorld).invert();
+          const localPoint = hit.point.clone().applyMatrix4(invMatrix);
+          const cs = this._controllerContentState;
+          cs.active = true;
+          cs.window = win;
+          cs.controller = controller;
+          cs.startPoint.copy(hit.point);
+          cs.lastPoint.copy(hit.point);
+          cs.startTime = performance.now();
+          cs.totalMove = 0;
+          cs.startDist = hit.distance;
+          win.onContentInteraction(localPoint, 'start', -1);
+          win.focus();
+          return;
+        }
+      }
     }
   }
 
   onSelectEnd(controller) {
+    // Controller content interaction end (tap detection)
+    const cs = this._controllerContentState;
+    if (cs.active && cs.controller === controller && cs.window) {
+      const elapsed = performance.now() - cs.startTime;
+      const isTap = elapsed < 500 && cs.totalMove < 0.04;
+
+      if (isTap && cs.window.onContentInteraction) {
+        const invMatrix = new THREE.Matrix4().copy(cs.window.contentMesh.matrixWorld).invert();
+        const localPoint = cs.startPoint.clone().applyMatrix4(invMatrix);
+        cs.window.onContentInteraction(localPoint, 'tap', -1);
+      }
+
+      if (cs.window.onContentInteraction) {
+        cs.window.onContentInteraction(null, 'end', -1);
+      }
+      cs.active = false;
+      cs.window = null;
+      cs.controller = null;
+    }
+
     if (this._controllerDragWindow && this._controllerDragCtrl === controller) {
       this._controllerDragWindow.dragging = false;
       this._controllerDragWindow = null;
@@ -233,11 +293,53 @@ class WindowManager {
           return true;
         }
       }
+
+      // Check content mesh for scroll/cursor interaction
+      if (win.contentMesh && win.onContentInteraction) {
+        const contentWorld = new THREE.Vector3();
+        win.contentMesh.getWorldPosition(contentWorld);
+        const contentDist = pinchPoint.distanceTo(contentWorld);
+        const maxDist = Math.max(win._contentW || 0.5, win._contentH || 0.4) * 0.6;
+        if (contentDist < maxDist) {
+          // Convert pinch point to content mesh local space
+          const invMatrix = new THREE.Matrix4().copy(win.contentMesh.matrixWorld).invert();
+          const localPoint = pinchPoint.clone().applyMatrix4(invMatrix);
+          const ci = this._contentInteraction[handIdx];
+          ci.active = true;
+          ci.window = win;
+          ci.startPoint.copy(pinchPoint);
+          ci.lastPoint.copy(pinchPoint);
+          ci.startTime = performance.now();
+          ci.totalMove = 0;
+          win.onContentInteraction(localPoint, 'start', handIdx);
+          win.focus();
+          return true;
+        }
+      }
     }
     return false;
   }
 
   onPinchEnd(handIdx) {
+    // Handle content interaction end
+    const ci = this._contentInteraction[handIdx];
+    if (ci.active && ci.window) {
+      const elapsed = performance.now() - ci.startTime;
+      const isTap = elapsed < 500 && ci.totalMove < 0.04;
+
+      if (isTap && ci.window.onContentInteraction) {
+        const invMatrix = new THREE.Matrix4().copy(ci.window.contentMesh.matrixWorld).invert();
+        const localPoint = ci.startPoint.clone().applyMatrix4(invMatrix);
+        ci.window.onContentInteraction(localPoint, 'tap', handIdx);
+      }
+
+      if (ci.window.onContentInteraction) {
+        ci.window.onContentInteraction(null, 'end', handIdx);
+      }
+      ci.active = false;
+      ci.window = null;
+    }
+
     const state = this._handDragState[handIdx];
     if (state.dragging && state.window) {
       const win = state.window;
@@ -259,6 +361,25 @@ class WindowManager {
   }
 
   onPinchMove(handIdx, pinchPoint) {
+    // Handle content interaction scroll
+    const ci = this._contentInteraction[handIdx];
+    if (ci.active && ci.window) {
+      const delta = pinchPoint.clone().sub(ci.lastPoint);
+      ci.totalMove += delta.length();
+      ci.lastPoint.copy(pinchPoint);
+
+      // Project delta onto window's local Y axis (up direction on the panel surface)
+      // This makes scroll work regardless of window orientation
+      const win = ci.window;
+      const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(win.root.quaternion);
+      const scrollDot = delta.dot(localUp); // how much hand moved along window's up
+
+      if (win.onContentInteraction) {
+        win.onContentInteraction({ y: scrollDot }, 'move', handIdx);
+      }
+      return; // don't also do drag
+    }
+
     const state = this._handDragState[handIdx];
 
     // Always track latest pinch position
@@ -456,6 +577,32 @@ class WindowManager {
       target.add(this._controllerDragOffset);
 
       win.root.position.copy(target);
+    }
+
+    // ── Controller content interaction update (scroll via ray) ──
+    const cs = this._controllerContentState;
+    if (cs.active && cs.controller && cs.window) {
+      const ctrl = cs.controller;
+      this._tempMatrix.identity().extractRotation(ctrl.matrixWorld);
+      this._raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
+      this._raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this._tempMatrix);
+
+      // Get current ray hit point on the content mesh
+      const hits = this._raycaster.intersectObject(cs.window.contentMesh, false);
+      if (hits.length > 0) {
+        const currentPoint = hits[0].point;
+        const delta = currentPoint.clone().sub(cs.lastPoint);
+        cs.totalMove += delta.length();
+
+        // Project onto window's local Y for scroll
+        const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cs.window.root.quaternion);
+        const scrollDot = delta.dot(localUp);
+
+        if (cs.window.onContentInteraction) {
+          cs.window.onContentInteraction({ y: scrollDot }, 'move', -1);
+        }
+        cs.lastPoint.copy(currentPoint);
+      }
     }
 
     // ── Controller resize update ──

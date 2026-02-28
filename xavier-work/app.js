@@ -30,6 +30,11 @@ renderer.shadowMap.enabled = true;
 const wm = new WindowManager(scene, renderer, camera);
 
 // ══════════════════════════════════════════════
+//  FILE VIEWER — Monaco-style editor windows
+// ══════════════════════════════════════════════
+const fileViewer = new FileViewerWindow(wm);
+
+// ══════════════════════════════════════════════
 //  ANIMATION MANAGER — canvas-driven animations
 // ══════════════════════════════════════════════
 const animMgr = new AnimationManager(scene);
@@ -38,6 +43,48 @@ const animMgr = new AnimationManager(scene);
 //  CODE CITY — 3D code visualization
 // ══════════════════════════════════════════════
 const codeCity = new CodeCityRenderer(scene, camera, wm);
+
+// Demo: open a file viewer window with sample code
+const demoEditor = fileViewer.open({
+  filename: 'calculator.py',
+  content: `class Calculator:
+    """A simple calculator class."""
+
+    def __init__(self):
+        self.history = []
+
+    def add(self, a, b):
+        result = a + b
+        self.history.append(('add', a, b, result))
+        return result
+
+    def subtract(self, a, b):
+        result = a - b
+        self.history.append(('sub', a, b, result))
+        return result
+
+    def multiply(self, a, b):
+        result = a * b
+        self.history.append(('mul', a, b, result))
+        return result
+
+    def get_history(self):
+        return self.history
+
+def main():
+    calc = Calculator()
+    print(calc.add(2, 3))
+    print(calc.subtract(10, 4))
+    print(calc.multiply(5, 6))
+    print(calc.get_history())
+
+if __name__ == "__main__":
+    main()`,
+  language: 'python',
+  position: [-0.5, 1.5, -0.8],
+  width: 0.7,
+  height: 0.55,
+});
 
 // Demo: analyze sample code on startup
 const DEMO_CODE = `class Calculator:
