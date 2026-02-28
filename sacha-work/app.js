@@ -749,6 +749,30 @@ function detectPinch(inputSource, frame, refSpace) {
   return { pinching: dist < 0.025, pinchPoint };
 }
 
+function detectFist(inputSource, frame, refSpace) {
+  const wrist      = getJointPos(inputSource, 'wrist', frame, refSpace);
+  const indexTip   = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  const middleTip  = getJointPos(inputSource, 'middle-finger-tip', frame, refSpace);
+  const ringTip    = getJointPos(inputSource, 'ring-finger-tip', frame, refSpace);
+  const pinkyTip   = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
+  const indexProx  = getJointPos(inputSource, 'index-finger-phalanx-proximal', frame, refSpace);
+  const middleProx = getJointPos(inputSource, 'middle-finger-phalanx-proximal', frame, refSpace);
+  const ringProx   = getJointPos(inputSource, 'ring-finger-phalanx-proximal', frame, refSpace);
+  const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
+  if (!wrist || !indexTip || !middleTip || !ringTip || !pinkyTip) return { fisting: false, wristPos: null };
+  const curled = [
+    indexTip.distanceTo(wrist)  < (indexProx  ? indexProx.distanceTo(wrist)  * 1.05 : 0.055),
+    middleTip.distanceTo(wrist) < (middleProx ? middleProx.distanceTo(wrist) * 1.05 : 0.055),
+    ringTip.distanceTo(wrist)   < (ringProx   ? ringProx.distanceTo(wrist)   * 1.05 : 0.055),
+    pinkyTip.distanceTo(wrist)  < (pinkyProx  ? pinkyProx.distanceTo(wrist)  * 1.05 : 0.055),
+  ].filter(Boolean).length;
+  return { fisting: curled >= 3, wristPos: wrist };
+}
+
+// State for right-fist scene rotation
+let _fistRotating = false;
+let _fistLastX = 0;
+
 // ── Animation loop ───────────────────────────
 const clock = new THREE.Clock();
 let handDetectedOnce = false;
@@ -883,123 +907,116 @@ renderer.setAnimationLoop((timestamp, frame) => {
         const pinchResult = detectPinch(inputSource, frame, refSpace);
 
         if (state.handedness === 'left') {
-          // LEFT HAND: pinch a bubble → grab into palm (hidden), open palm → show orbiting
+          // ── LEFT HAND ──────────────────────────────────────────────────
+          // Pinch on free bubble → add to palm context (orbit)
+          // Pinch in empty space → go back one folder
           if (pinchResult.pinching && !state.pinching) {
             state.pinching = true;
             if (pinchResult.pinchPoint) {
-              const titleWorldPos = new THREE.Vector3();
-              titleBar.getWorldPosition(titleWorldPos);
-              if (pinchResult.pinchPoint.distanceTo(titleWorldPos) < 0.15) {
-                state.dragging = true;
-                state.dragOffset.copy(windowBody.position).sub(pinchResult.pinchPoint);
-                borderMat.opacity = 0.7;
-                titleMat.color.set(0x5a5a8c);
+              let closest = null;
+              let closestDist = 0.12;
+              fileBubbles.forEach(b => {
+                if (b.userData.inPalm) return;
+                const d = pinchResult.pinchPoint.distanceTo(b.position);
+                if (d < closestDist) { closestDist = d; closest = b; }
+              });
+              if (closest) {
+                closest.userData.inPalm = true;
+                closest.userData.grabbed = false;
+                closest.userData.scaleTarget = 0.5;
+                closest.userData.palmOrbitIndex = palmBubbles.length;
+                closest.visible = true;
+                palmBubbles.push(closest);
+                markBubbleOpened(closest);
               } else {
-                let closest = null;
-                let closestDist = 0.12;
-                fileBubbles.forEach(b => {
-                  if (b.userData.inPalm) return;
-                  const d = pinchResult.pinchPoint.distanceTo(b.position);
-                  if (d < closestDist) { closestDist = d; closest = b; }
-                });
-                if (closest) {
-                  closest.userData.inPalm = true;
-                  closest.userData.grabbed = false;
-                  closest.userData.scaleTarget = 0.5;
-                  closest.userData.palmOrbitIndex = palmBubbles.length;
-                  closest.visible = true;
-                  palmBubbles.push(closest);
-                  openFileBubble(closest);
+                // Empty space pinch → go back one folder
+                const parts = currentPath.split('/').filter(Boolean);
+                if (parts.length > 1) {
+                  parts.pop();
+                  loadFiles(parts.join('/'));
+                } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
+                  loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
                 }
               }
             }
           } else if (!pinchResult.pinching && state.pinching) {
             state.pinching = false;
-            if (state.dragging) {
-              state.dragging = false;
-              borderMat.opacity = 0.3;
-              titleMat.color.set(0x3a3a5c);
-            }
           }
 
-          if (state.dragging && pinchResult.pinchPoint) {
-            const target = pinchResult.pinchPoint.clone().add(state.dragOffset);
-            windowBody.position.lerp(target, 0.4);
-            const camPos = new THREE.Vector3();
-            camera.getWorldPosition(camPos);
-            windowBody.lookAt(camPos);
-          }
-
-          // Track left palm
+          // Track left palm center for orbit
           const palmData = detectPalmOpen(inputSource, frame, refSpace, 'left');
           if (palmData.palmCenter) {
             leftPalmCenter = palmData.palmCenter.clone();
             leftPalmCenter.y += 0.05;
           }
-
           // Palm open → show palm bubbles orbiting, palm closed → hide them
-          palmBubbles.forEach(b => {
-            b.visible = palmData.open;
-          });
+          palmBubbles.forEach(b => { b.visible = palmData.open; });
 
         } else {
-          // RIGHT HAND: pinch a palm bubble → release it back to its original position
+          // ── RIGHT HAND ─────────────────────────────────────────────────
+          // Pinch on palm bubble → release back to scene
+          // Pinch on free bubble → open file / navigate folder
+          // Closed fist (held) → rotate all bubbles around user
+
+          const fistResult = detectFist(inputSource, frame, refSpace);
+
+          if (fistResult.fisting) {
+            if (!_fistRotating) {
+              _fistRotating = true;
+              _fistLastX = fistResult.wristPos ? fistResult.wristPos.x : 0;
+            } else if (fistResult.wristPos) {
+              const dx = fistResult.wristPos.x - _fistLastX;
+              _fistLastX = fistResult.wristPos.x;
+              if (Math.abs(dx) > 0.0005) {
+                const angle = dx * 3.5;
+                const cos = Math.cos(angle), sin = Math.sin(angle);
+                fileBubbles.forEach(b => {
+                  if (b.userData.inPalm) return;
+                  const bp = b.userData.basePos;
+                  const nx = bp.x * cos + bp.z * sin;
+                  const nz = -bp.x * sin + bp.z * cos;
+                  bp.x = nx; bp.z = nz;
+                  b.userData.restPos.x = nx; b.userData.restPos.z = nz;
+                });
+              }
+            }
+          } else {
+            _fistRotating = false;
+          }
+
           if (pinchResult.pinching && !state.pinching) {
             state.pinching = true;
             if (pinchResult.pinchPoint) {
-              const titleWorldPos = new THREE.Vector3();
-              titleBar.getWorldPosition(titleWorldPos);
-              if (pinchResult.pinchPoint.distanceTo(titleWorldPos) < 0.15) {
-                state.dragging = true;
-                state.dragOffset.copy(windowBody.position).sub(pinchResult.pinchPoint);
-                borderMat.opacity = 0.7;
-                titleMat.color.set(0x5a5a8c);
+              // Check palm bubbles first
+              let closest = null, closestDist = 0.1, closestIdx = -1;
+              palmBubbles.forEach((b, pi) => {
+                if (!b.visible) return;
+                const d = pinchResult.pinchPoint.distanceTo(b.position);
+                if (d < closestDist) { closestDist = d; closest = b; closestIdx = pi; }
+              });
+              if (closest) {
+                // Release from palm → return to scene
+                closest.userData.inPalm = false;
+                closest.userData.opened = false;
+                closest.userData.scaleTarget = 1;
+                closest.userData.restPos.copy(closest.userData.basePos);
+                closest.visible = true;
+                if (openedBubble === closest) openedBubble = null;
+                palmBubbles.splice(closestIdx, 1);
+                palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
               } else {
-                let closest = null;
-                let closestDist = 0.1;
-                let closestIdx = -1;
-                palmBubbles.forEach((b, pi) => {
-                  if (!b.visible) return;
+                // Check free bubbles → open / navigate
+                let freeClosest = null, freeClosestDist = 0.12;
+                fileBubbles.forEach(b => {
+                  if (b.userData.inPalm) return;
                   const d = pinchResult.pinchPoint.distanceTo(b.position);
-                  if (d < closestDist) { closestDist = d; closest = b; closestIdx = pi; }
+                  if (d < freeClosestDist) { freeClosestDist = d; freeClosest = b; }
                 });
-                if (closest) {
-                  closest.userData.inPalm = false;
-                  closest.userData.opened = false;
-                  closest.userData.scaleTarget = 1;
-                  closest.userData.glowTarget = 0.3;
-                  closest.userData.restPos.copy(closest.userData.basePos);
-                  closest.visible = true;
-                  if (openedBubble === closest) openedBubble = null;
-                  palmBubbles.splice(closestIdx, 1);
-                  palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
-                } else {
-                  // No bubble hit → go back one folder
-                  const parts = currentPath.split('/').filter(Boolean);
-                  if (parts.length > 1) {
-                    parts.pop();
-                    loadFiles(parts.join('/'));
-                  } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
-                    loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
-                  }
-                }
+                if (freeClosest) openFileBubble(freeClosest);
               }
             }
           } else if (!pinchResult.pinching && state.pinching) {
             state.pinching = false;
-            if (state.dragging) {
-              state.dragging = false;
-              borderMat.opacity = 0.3;
-              titleMat.color.set(0x3a3a5c);
-            }
-          }
-
-          if (state.dragging && pinchResult.pinchPoint) {
-            const target = pinchResult.pinchPoint.clone().add(state.dragOffset);
-            windowBody.position.lerp(target, 0.4);
-            const camPos = new THREE.Vector3();
-            camera.getWorldPosition(camPos);
-            windowBody.lookAt(camPos);
           }
         }
       });
