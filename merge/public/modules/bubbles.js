@@ -474,6 +474,62 @@ class FileBubbleManager {
     return false;
   }
 
+  // Left hand: pinch free bubble → add to palm context; pinch palm bubble → remove from context
+  handleLeftPinch(pinchPoint) {
+    // Free bubble first (radius 12cm) → add to context
+    let closest = null, cd = 0.12;
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
+    }
+    if (closest) {
+      closest.userData.inPalm = true;
+      closest.userData.scaleTarget = 0.5;
+      closest.userData.palmOrbitIndex = this.palmBubbles.length;
+      closest.visible = true;
+      this.palmBubbles.push(closest);
+      return true;
+    }
+    // Palm bubble (radius 8cm) → remove from context
+    let pc = null, pd = 0.08, pi = -1;
+    this.palmBubbles.forEach((b, i) => {
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < pd) { pd = d; pc = b; pi = i; }
+    });
+    if (pc) {
+      pc.userData.inPalm = false;
+      pc.userData.scaleTarget = 1;
+      pc.userData.restPos.copy(pc.userData.basePos);
+      pc.visible = true;
+      if (this.openedBubble === pc) this.openedBubble = null;
+      this.palmBubbles.splice(pi, 1);
+      this.palmBubbles.forEach((b, i) => { b.userData.palmOrbitIndex = i; });
+      return true;
+    }
+    return false;
+  }
+
+  // Right fist horizontal sweep → rotate all free bubbles around Y axis
+  rotateBubbles(dx) {
+    const a = dx * 3.5, cos = Math.cos(a), sin = Math.sin(a);
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const bp = b.userData.basePos;
+      const nx = bp.x * cos + bp.z * sin, nz = -bp.x * sin + bp.z * cos;
+      bp.x = nx; bp.z = nz;
+      b.userData.restPos.x = nx; b.userData.restPos.z = nz;
+    }
+  }
+
+  // Go back to parent directory
+  navigateBack() {
+    if (this.currentPath === '.') return;
+    const parts = this.currentPath.split('/').filter(p => p && p !== '.');
+    if (parts.length > 1) { parts.pop(); this.loadFiles(parts.join('/')); }
+    else { this.loadFiles('.'); }
+  }
+
   handleRaycast(raycaster) {
     const spheres = this.fileBubbles.map(b => b.userData.sphere).filter(Boolean);
     if (!spheres.length) return false;
