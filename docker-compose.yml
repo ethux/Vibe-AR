@@ -8,6 +8,7 @@ services:
       - VIBE_HOME=/root/.vibe
     volumes:
       - ./workspace:/workspace
+      - ./mcp-server:/opt/mcp-server
     ports:
       - "5173:5173"
       - "3333:3333"
