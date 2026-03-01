@@ -2,6 +2,7 @@
 import {
   getRenderer, setRenderer, getTermWs, WIN_W, WIN_H,
   getProjectState, setProjectState, getActiveSplash,
+  setScene as _setScene, setCamera as _setCamera,
 } from './state.js';
 import { log } from './logging.js';
 import { renderTermToCanvas, termRenderCanvas } from './terminal.js';
@@ -17,7 +18,7 @@ import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
 import { LivePreviewManager } from './live-preview.js';
-import { HandRenderer } from './HandRenderer.js';
+import { initHands } from './HandRenderer.js';
 import { initSceneControl } from './scene-control.js';
 import { StreamScreenWindow } from './StreamScreenWindow.js';
 import { FileViewerWindow } from './FileViewerWindow.js';
@@ -29,7 +30,7 @@ let codeCity;  // 3D code visualization
 let bubbleMgr; // file bubble browser
 let gitTree;   // 3D git history tree
 let livePreview; // dev server preview manager
-let handRenderer; // 3D glove hand models
+let handRenderer; // XRHandModelFactory hand models
 let streamScreen; // live Mac screen stream
 let fileViewer;   // code/image file viewer
 
@@ -56,6 +57,10 @@ export function initScene() {
   camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.6, 0);
   clock = new THREE.Clock();
+
+  // Store in shared state so other modules can access without circular imports
+  _setScene(scene);
+  _setCamera(camera);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setSize(innerWidth, innerHeight);
@@ -99,8 +104,8 @@ export function initScene() {
   // ── Live Preview (dev server detection) ──
   livePreview = new LivePreviewManager(scene, wm);
 
-  // ── Hand Renderer (3D glove models) ──
-  handRenderer = new HandRenderer(scene);
+  // ── Hand Renderer (Three.js XRHandModelFactory — spheres) ──
+  handRenderer = initHands(scene, renderer);
 
   // ── Stream Screen Window (Mac screen capture) ──
   streamScreen = new StreamScreenWindow(wm);
@@ -150,11 +155,60 @@ export function initScene() {
   const ctrl1 = renderer.xr.getController(1);
   scene.add(ctrl0); scene.add(ctrl1);
 
-  function addRay(c) {
-    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-3)]);
-    c.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xFF7000 })));
+  // Orange ray line + white gradient glow along beam length
+  // Gradient: transparent at start (hand) → white at middle → transparent at end (tip)
+  const RAY_MAX_LEN = 3;
+  const _rayParts = []; // [{line, glow, controller}]
+  function addRayWithGlow(c) {
+    // Simple orange ray line (unit length along -Z, will be scaled)
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
+    ]);
+    const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xFF7000 }));
+    line.renderOrder = 1000;
+    line.frustumCulled = false;
+    c.add(line);
+
+    // White glow quad — gradient ALONG the beam (z-axis), unit length
+    const hw = 0.008;
+    const positions = new Float32Array([
+      -hw, 0, 0,    hw, 0, 0,
+      -hw, 0, -0.5, hw, 0, -0.5,
+      -hw, 0, -1,   hw, 0, -1,
+    ]);
+    const alphas = new Float32Array([0, 0, 1, 1, 0, 0]);
+    const indices = [0,2,1, 1,2,3, 2,4,3, 3,4,5];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('aAlpha', new THREE.Float32BufferAttribute(alphas, 1));
+    geo.setIndex(indices);
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: `
+        attribute float aAlpha;
+        varying float vAlpha;
+        void main() {
+          vAlpha = aAlpha;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying float vAlpha;
+        void main() {
+          gl_FragColor = vec4(1.0, 1.0, 1.0, vAlpha * 0.5);
+        }
+      `,
+      transparent: true, depthWrite: false, depthTest: false,
+      side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    });
+    const glow = new THREE.Mesh(geo, mat);
+    glow.renderOrder = 999;
+    glow.frustumCulled = false;
+    c.add(glow);
+
+    _rayParts.push({ line, glow, controller: c });
   }
-  addRay(ctrl0); addRay(ctrl1);
+  addRayWithGlow(ctrl0); addRayWithGlow(ctrl1);
 
   scene.add(renderer.xr.getControllerGrip(0));
   scene.add(renderer.xr.getControllerGrip(1));
@@ -267,12 +321,48 @@ export function initScene() {
   const DRAG_OPEN_THRESHOLD  = 0.05;  // 5cm closer to camera → open/enter
 
   // ── Hand laser pointer (right hand index finger → distant bubble targeting) ──
-  const _laserGeo = new THREE.BufferGeometry();
-  _laserGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,0,-2.5], 3));
-  const _laserMat = new THREE.LineBasicMaterial({ color: 0xFF7000, transparent: true, opacity: 0.55, depthTest: false });
-  const _laserLine = new THREE.Line(_laserGeo, _laserMat);
+  // Gradient quad beam: white center, transparent edges
+  const _laserGeo = (() => {
+    const hw = 0.004;
+    const positions = new Float32Array([
+      -hw*3, 0, 0,   0, 0, 0,   0, 0, 0,   hw*3, 0, 0,
+      -hw*3, 0, -1,   0, 0, -1,  0, 0, -1,  hw*3, 0, -1,
+    ]);
+    const alphas = new Float32Array([0,1,1,0, 0,1,1,0]);
+    const indices = [0,4,1, 1,4,5, 1,5,2, 2,5,6, 2,6,3, 3,6,7];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.setAttribute('aAlpha', new THREE.Float32BufferAttribute(alphas, 1));
+    g.setIndex(indices);
+    return g;
+  })();
+  const _laserMat = new THREE.ShaderMaterial({
+    vertexShader: `
+      attribute float aAlpha;
+      varying float vAlpha;
+      void main() {
+        vAlpha = aAlpha;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uBrightness;
+      varying float vAlpha;
+      void main() {
+        gl_FragColor = vec4(1.0, 1.0, 1.0, vAlpha * uBrightness);
+      }
+    `,
+    uniforms: { uBrightness: { value: 0.7 } },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+  const _laserLine = new THREE.Mesh(_laserGeo, _laserMat);
   _laserLine.visible = false;
-  _laserLine.renderOrder = 999;
+  _laserLine.renderOrder = 1001;  // Above controller rays
+  _laserLine.frustumCulled = false;
   scene.add(_laserLine);
   let _laserTargetBubble = null; // bubble currently aimed at by the laser
 
@@ -537,12 +627,12 @@ export function initScene() {
               const hit = bubbleMgr.findBubbleByRay(indexTip, laserDir);
               _laserTargetBubble = (hit && !hit.userData.inPalm) ? hit : null;
               const endPt = hit ? hit.position.clone() : indexTip.clone().addScaledVector(laserDir, 2.5);
-              const pos = _laserLine.geometry.attributes.position;
-              pos.setXYZ(0, indexTip.x, indexTip.y, indexTip.z);
-              pos.setXYZ(1, endPt.x, endPt.y, endPt.z);
-              pos.needsUpdate = true;
-              _laserMat.color.setHex(hit ? 0xffb347 : 0xFF7000);
-              _laserMat.opacity = hit ? 0.95 : 0.45;
+              // Position the laser beam quad: place at indexTip, orient toward endPt
+              _laserLine.position.copy(indexTip);
+              _laserLine.lookAt(endPt);
+              const beamLen = indexTip.distanceTo(endPt);
+              _laserLine.scale.set(1, 1, beamLen);
+              _laserMat.uniforms.uBrightness.value = hit ? 0.95 : 0.55;
               if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
               _laserLine.visible = true;
             } else {
@@ -567,21 +657,34 @@ export function initScene() {
     wm.update(frame, dt, elapsed, [ctrl0, ctrl1], xrCamera);
     animMgr.update(dt, elapsed, xrCamera);
 
+    // ── Clip rays + glow at window hits ──
+    {
+      const _rc = new THREE.Raycaster();
+      const _tm = new THREE.Matrix4();
+      const winMeshes = wm.windows.filter(w => !w.closed).flatMap(w => {
+        const m = [];
+        w.root.traverse(c => { if (c.isMesh) m.push(c); });
+        return m;
+      });
+      for (const rp of _rayParts) {
+        _tm.identity().extractRotation(rp.controller.matrixWorld);
+        _rc.ray.origin.setFromMatrixPosition(rp.controller.matrixWorld);
+        _rc.ray.direction.set(0, 0, -1).applyMatrix4(_tm);
+        _rc.far = RAY_MAX_LEN;
+        const hits = winMeshes.length ? _rc.intersectObjects(winMeshes, false) : [];
+        const dist = hits.length ? hits[0].distance : RAY_MAX_LEN;
+        rp.line.scale.z = dist;
+        rp.glow.scale.z = dist;
+      }
+    }
+
     // Update CodeCity (matrix rain, finger-touch tooltips)
     codeCity.updateMatrix(dt);
     if (renderer.xr.isPresenting && codeCity._fingerTips) {
       codeCity.updateHover(codeCity._fingerTips);
     }
 
-    // Update 3D hand glove models
-    if (frame && renderer.xr.isPresenting) {
-      const sess = renderer.xr.getSession();
-      const ref = renderer.xr.getReferenceSpace();
-      if (sess && ref) {
-        const handSources = [...sess.inputSources].filter(s => s.hand);
-        handRenderer.update(frame, ref, handSources);
-      }
-    }
+    // Hand models updated automatically by Three.js XRHandModelFactory (updateMatrixWorld)
 
     // Update file bubbles (bobbing animation)
     bubbleMgr.update(dt, elapsed);
