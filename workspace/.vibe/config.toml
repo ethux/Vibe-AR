@@ -1,0 +1,29 @@
+system_prompt_id = "vibe-ar"
+active_model = "large"
+
+[[providers]]
+name = "mistral"
+api_base = "http://web:3001/mistral-proxy/v1"
+api_key_env_var = "MISTRAL_API_KEY"
+backend = "generic"
+
+[[models]]
+name = "Devstral-Small"
+provider = "mistral"
+alias = "devstral"
+temperature = 0.15
+
+[[models]]
+name = "mistral-large-latest"
+provider = "mistral"
+alias = "large"
+temperature = 0.15
+
+[[mcp_servers]]
+name = "vibe_ar"
+transport = "stdio"
+command = "python"
+args = ["/opt/mcp-server/server.py"]
+env = { "VIBE_WEB_URL" = "http://web:3001", "VIBE_WORKSPACE" = "/workspace" }
+startup_timeout_sec = 10
+tool_timeout_sec = 30
