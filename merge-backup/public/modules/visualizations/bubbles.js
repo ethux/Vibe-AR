@@ -553,6 +553,17 @@ class FileBubbleManager {
     return this.fileBubbles.find(b => b.userData.sphere === hits[0].object) || null;
   }
 
+  // Find bubble within maxDist of a position (e.g. index finger tip)
+  findBubbleAtPosition(pos, maxDist = 0.06) {
+    let closest = null, cd = maxDist;
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const d = pos.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
+    }
+    return closest;
+  }
+
   // Open a specific bubble (public entry point for drag-to-open)
   openBubble(bubble) {
     bubble.userData.scaleTarget = 1.3;
@@ -799,6 +810,79 @@ class FileBubbleManager {
       setTimeout(() => this.loadFiles(folder), 500);
     }
     // For deletes, the polling will catch the removal
+  }
+
+  arrangeFiles(layout = 'arc', groupBy = 'type') {
+    const free = this.fileBubbles.filter(b => !b.userData.inPalm);
+    if (!free.length) return;
+
+    // Group bubbles
+    const groups = new Map();
+    for (const b of free) {
+      const fd = b.userData.fileData;
+      let key;
+      if (groupBy === 'extension') {
+        key = fd?.ext || (fd?.type === 'folder' ? 'folder' : 'other');
+      } else if (groupBy === 'name') {
+        key = (fd?.name?.[0] || '?').toUpperCase();
+      } else { // 'type'
+        if (fd?.type === 'folder') key = 'folders';
+        else if (['js','ts','tsx','jsx','py','rb','go','rs','css','html','sh'].includes(fd?.ext)) key = 'code';
+        else if (['json','yaml','yml','toml','env','conf'].includes(fd?.ext)) key = 'config';
+        else if (['md','txt','rst','pdf'].includes(fd?.ext)) key = 'docs';
+        else key = 'other';
+      }
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(b);
+    }
+
+    const groupKeys = [...groups.keys()].sort();
+    let globalIdx = 0;
+    const total = free.length;
+
+    for (let g = 0; g < groupKeys.length; g++) {
+      const bubbles = groups.get(groupKeys[g]);
+      for (let i = 0; i < bubbles.length; i++) {
+        const b = bubbles[i];
+        let pos;
+        if (layout === 'grid') {
+          const cols = Math.ceil(Math.sqrt(total));
+          const row = Math.floor(globalIdx / cols);
+          const col = globalIdx % cols;
+          pos = new THREE.Vector3(
+            (col - cols / 2) * 0.18,
+            1.4 - row * 0.18,
+            -0.7
+          );
+        } else if (layout === 'cluster') {
+          const gAngle = (g / groupKeys.length) * Math.PI * 1.4 - Math.PI * 0.7;
+          const gRadius = 0.6;
+          const cx = Math.sin(gAngle) * gRadius;
+          const cz = -Math.cos(gAngle) * gRadius;
+          const iAngle = (i / bubbles.length) * Math.PI * 2;
+          const iRadius = 0.08 + bubbles.length * 0.02;
+          pos = new THREE.Vector3(
+            cx + Math.cos(iAngle) * iRadius,
+            1.2 + Math.sin(iAngle) * iRadius,
+            cz
+          );
+        } else { // 'arc'
+          const angle = (globalIdx / total) * Math.PI * 1.6 - Math.PI * 0.8;
+          const radius = 0.7 + (g % 3) * 0.12;
+          pos = new THREE.Vector3(
+            Math.sin(angle) * radius,
+            1.2 + Math.sin(globalIdx * 0.9) * 0.15,
+            -Math.cos(angle) * radius
+          );
+        }
+        b.userData._moveTarget = pos;
+        b.userData._moveStart = b.position.clone();
+        b.userData._moveT = 0;
+        b.userData.basePos = pos.clone();
+        b.userData.restPos = pos.clone();
+        globalIdx++;
+      }
+    }
   }
 
   moveFileBubble(filePath, position) {

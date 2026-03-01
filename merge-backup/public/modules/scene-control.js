@@ -143,7 +143,10 @@ function _dispatch(cmd) {
 
     // ── File visualization commands ──
     case 'browse_folder':
-      if (bubbleMgr) bubbleMgr.loadFiles(cmd.path || '.');
+      if (bubbleMgr) {
+        bubbleMgr.loadFiles(cmd.path || '.');
+        if (!bubbleMgr._explorerVisible) bubbleMgr.show();
+      }
       break;
 
     case 'highlight_file':
@@ -157,6 +160,13 @@ function _dispatch(cmd) {
         3,
         cmd.action === 'create' ? '#22C55E' : cmd.action === 'delete' ? '#EF4444' : '#FF7000'
       );
+      break;
+
+    case 'arrange_files':
+      if (bubbleMgr) {
+        if (!bubbleMgr._explorerVisible) bubbleMgr.show();
+        bubbleMgr.arrangeFiles(cmd.layout, cmd.groupBy);
+      }
       break;
 
     case 'move_file_bubble':

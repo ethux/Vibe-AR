@@ -1,16 +1,32 @@
 system_prompt_id = "vibe-ar"
 active_model = "mistral-large-latest"
 
+# Cloud provider (Mistral API via proxy)
 [[providers]]
 name = "mistral"
 api_base = "http://web:3001/mistral-proxy/v1"
 api_key_env_var = "MISTRAL_API_KEY"
 backend = "generic"
 
+# Local provider (vLLM via proxy)
+[[providers]]
+name = "vllm"
+api_base = "http://web:3001/mistral-proxy/v1"
+api_key_env_var = "VLLM_API_KEY"
+backend = "generic"
+
+# Local Devstral Small (24B) via vLLM — fast, free, on your own GPU
+[[models]]
+name = "Devstral-Small"
+provider = "vllm"
+alias = "devstral"
+temperature = 0.15
+
+# Mistral Large (cloud) — most capable, paid API
 [[models]]
 name = "mistral-large-latest"
 provider = "mistral"
-alias = "mistral-large-latest"
+alias = "large"
 temperature = 0.15
 
 [[mcp_servers]]
