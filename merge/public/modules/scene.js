@@ -13,7 +13,7 @@ import { makeTextTexture } from './textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
+import { getJointPos, getIndexTipSmoothed, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
 import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
@@ -389,7 +389,7 @@ export function initScene() {
           if (!src.hand) continue;
           const handIdx = src.handedness === 'left' ? 0 : 1;
           const s = hs[handIdx];
-          const p = htDetectPinch(src, frame, ref);
+          const p = htDetectPinch(src, frame, ref, handIdx);
 
           if (p.pinching && !s.pinching) {
             s.pinching = true;
@@ -611,8 +611,8 @@ export function initScene() {
             // Velocity persists — momentum continues after fist release
           }
 
-          // Track index finger tips for CodeCity touch detection
-          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+          // Track index finger tips for CodeCity touch detection (smoothed)
+          const indexTip = getIndexTipSmoothed(src, frame, ref, handIdx);
           if (indexTip) {
             if (!codeCity._fingerTips) codeCity._fingerTips = [];
             codeCity._fingerTips[handIdx] = { pos: indexTip, handedness: handedness };

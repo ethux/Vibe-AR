@@ -666,6 +666,22 @@ class WindowManager {
     }
   }
 
+  // ── Index-finger tap target (for hold-to-activate) ──
+  getIndexTapTarget(fingerTipPos) {
+    if (!fingerTipPos) return null;
+    for (const win of this.windows) {
+      if (win.closed || !win.visible) continue;
+      if (win.closable) {
+        const closeWorld = new THREE.Vector3();
+        win.closeBtnMesh.getWorldPosition(closeWorld);
+        if (fingerTipPos.distanceTo(closeWorld) < 0.06) {
+          return { type: 'close', win };
+        }
+      }
+    }
+    return null;
+  }
+
   // ── Hand-based hover detection ────────────────────────────────
 
   updateHandHover(handIdx, fingerTipPos) {

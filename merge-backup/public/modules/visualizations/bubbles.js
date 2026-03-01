@@ -467,7 +467,7 @@ class FileBubbleManager {
       }
       // Smooth move to target position (relayout or return from palm)
       else if (ud.targetPos) {
-        const k = Math.min(1, dt * 5);
+        const k = Math.min(1, dt * 10);  // snappier return
         b.position.x += (ud.targetPos.x - b.position.x) * k;
         b.position.y += (ud.targetPos.y - b.position.y) * k;
         b.position.z += (ud.targetPos.z - b.position.z) * k;
@@ -501,7 +501,7 @@ class FileBubbleManager {
       // ── Scale damping (spring-like) ──
       if (ud.scaleTarget !== undefined) {
         const cs = ud.cardSprite ? ud.cardSprite.scale.x / ud.cardW : 1;
-        const ns = cs + (ud.scaleTarget - cs) * 0.12;
+        const ns = cs + (ud.scaleTarget - cs) * 0.2;  // snappier scale
         const scale = ns * ud.cardW;
         if (ud.cardSprite) ud.cardSprite.scale.set(scale, scale, 1);
         if (ud.labelSprite) ud.labelSprite.scale.set(ud.cardW * 2.2 * ns, ud.cardW * 0.42 * ns, 1);
@@ -528,6 +528,17 @@ class FileBubbleManager {
     this.leftPalmCenter = palmCenter;
     this.leftPalmOpen = palmOpen;
     // Visibility driven by _palmOpenness animation in update()
+  }
+
+  // Find bubble at position within maxDist (finger must be close, not at distance)
+  findBubbleAtPosition(pos, maxDist = 0.06) {
+    let closest = null, cd = maxDist;
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const d = pos.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
+    }
+    return closest;
   }
 
   // Find the closest free bubble within 12cm (not in palm)
@@ -857,7 +868,7 @@ class FileBubbleManager {
         cx + Math.cos(angle) * r,
         cy + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
         cz + Math.sin(angle) * Math.cos(tilt) * r
-      ), 0.2);
+      ), 0.28);  // snappier palm orbit
 
       // Scale and opacity
       const scale = o * ud.cardW * 0.32;

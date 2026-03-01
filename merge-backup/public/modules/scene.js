@@ -13,7 +13,7 @@ import { makeTextTexture } from './core/textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './visualizations/AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './input/hand-tracking.js';
+import { getJointPos, getIndexTipSmoothed, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './input/hand-tracking.js';
 import { CodeCityRenderer } from './visualizations/CodeCity.js';
 import { FileBubbleManager } from './visualizations/bubbles.js';
 import { GitTreeRenderer } from './visualizations/git-tree.js';
@@ -282,7 +282,7 @@ export function initScene() {
 
   // Per-hand mascot animation state
   // pointFrames: debounce counter — must reach POINT_THRESHOLD before triggering
-  const POINT_THRESHOLD = 8;
+  const POINT_THRESHOLD = 12;
   const handAnimState = [
     { active: null, wasOpen: false, pointFrames: 0 }, // left
     { active: null, wasOpen: false, pointFrames: 0 }, // right
@@ -313,64 +313,22 @@ export function initScene() {
   const ROT_MAX      = 0.035;     // velocity cap to avoid wild spinning
   const ROT_STOP     = 0.00008;   // below this, snap to zero
 
-  // Grab-drag state (right hand pinch on bubble → bubble tracks hand; pull 5cm + release = open)
-  let _draggedBubble         = null;
-  const _dragGrabOffset      = new THREE.Vector3(); // bubble pos − pinch pos at grab start
-  let _dragStartCamDist      = 0;                   // distance camera→pinch at grab start
-  const _dragOriginalPos     = new THREE.Vector3();
-  const DRAG_OPEN_THRESHOLD  = 0.05;  // 5cm closer to camera → open/enter
-
-  // ── Hand laser pointer (right hand index finger → distant bubble targeting) ──
-  // Gradient quad beam: white center, transparent edges
-  const _laserGeo = (() => {
-    const hw = 0.004;
-    const positions = new Float32Array([
-      -hw*3, 0, 0,   0, 0, 0,   0, 0, 0,   hw*3, 0, 0,
-      -hw*3, 0, -1,   0, 0, -1,  0, 0, -1,  hw*3, 0, -1,
-    ]);
-    const alphas = new Float32Array([0,1,1,0, 0,1,1,0]);
-    const indices = [0,4,1, 1,4,5, 1,5,2, 2,5,6, 2,6,3, 3,6,7];
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    g.setAttribute('aAlpha', new THREE.Float32BufferAttribute(alphas, 1));
-    g.setIndex(indices);
-    return g;
-  })();
-  const _laserMat = new THREE.ShaderMaterial({
-    vertexShader: `
-      attribute float aAlpha;
-      varying float vAlpha;
-      void main() {
-        vAlpha = aAlpha;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uBrightness;
-      varying float vAlpha;
-      void main() {
-        gl_FragColor = vec4(1.0, 1.0, 1.0, vAlpha * uBrightness);
-      }
-    `,
-    uniforms: { uBrightness: { value: 0.7 } },
-    transparent: true,
-    depthWrite: false,
-    depthTest: false,
-    side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
-  });
-  const _laserLine = new THREE.Mesh(_laserGeo, _laserMat);
-  _laserLine.visible = false;
-  _laserLine.renderOrder = 1001;  // Above controller rays
-  _laserLine.frustumCulled = false;
-  scene.add(_laserLine);
-  let _laserTargetBubble = null; // bubble currently aimed at by the laser
+  // Index-finger press: finger must be IN FRONT of target (close, not at distance)
+  const INDEX_PRESS_DIST     = 0.06;   // 6cm — finger must be near bubble/button
+  const INDEX_PRESS_FRAMES   = 5;      // frames (hold ~80ms) — less accidental
+  const INDEX_TAP_COOLDOWN_MS = 500;
+  let _indexPressTarget      = null;
+  let _indexPressFrames      = 0;
+  let _indexTapCooldownUntil = 0;
 
   // ── Render loop ──
   renderer.setAnimationLoop((ts, frame) => {
     const dt = clock.getDelta();
     const elapsed = clock.getElapsedTime();
     const termWs = getTermWs();
+
+    // Ensure world matrices are up to date for raycasting
+    scene.updateMatrixWorld(true);
 
     // Terminal texture → draw onto window's content canvas
     if (termWs && termWs.readyState === WebSocket.OPEN && termWin && !termWin.closed) {
@@ -389,7 +347,7 @@ export function initScene() {
           if (!src.hand) continue;
           const handIdx = src.handedness === 'left' ? 0 : 1;
           const s = hs[handIdx];
-          const p = htDetectPinch(src, frame, ref);
+          const p = htDetectPinch(src, frame, ref, handIdx);
 
           if (p.pinching && !s.pinching) {
             s.pinching = true;
@@ -425,42 +383,14 @@ export function initScene() {
                 tmpRay.ray.direction.set(0, 0, -1);
                 if (gitTree.handleRaycast(tmpRay)) continue;
               }
-              // Left hand: add to palm context only (no removal — removal is right hand)
+              // Left hand: add to palm context only
               if (src.handedness === 'left') {
                 if (bubbleMgr.isVisible() && bubbleMgr.handleLeftPinchAdd(p.pinchPoint)) continue;
               } else {
                 // Right hand pinch near palm bubble → remove from context
                 if (bubbleMgr.handleRightPinchRemove(p.pinchPoint)) continue;
                 if (!bubbleMgr.isVisible()) { wm.onPinchStart(handIdx, p.pinchPoint); continue; }
-                // Right hand laser target → click to open immediately (folder nav or file view)
-                if (_laserTargetBubble) {
-                  bubbleMgr.openBubble(_laserTargetBubble);
-                  _laserTargetBubble = null;
-                  _backSwipeActive = false;
-                  continue;
-                }
-                // Right hand proximity grab-drag (no laser, hand is close to a bubble)
-                let grabbed = bubbleMgr.findClosestFreeBubble(p.pinchPoint);
-                if (!grabbed) {
-                  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-                  const camPos = new THREE.Vector3();
-                  xrCam.getWorldPosition(camPos);
-                  const rayDir = p.pinchPoint.clone().sub(camPos);
-                  grabbed = bubbleMgr.findBubbleByRay(camPos, rayDir);
-                }
-                if (grabbed) {
-                  _draggedBubble = grabbed;
-                  _dragGrabOffset.copy(grabbed.position).sub(p.pinchPoint);
-                  _dragOriginalPos.copy(grabbed.position);
-                  const _grabCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-                  const _grabCamPos = new THREE.Vector3();
-                  _grabCam.getWorldPosition(_grabCamPos);
-                  _dragStartCamDist = p.pinchPoint.distanceTo(_grabCamPos);
-                  grabbed.userData.scaleTarget = 1.15;
-                  _backSwipeActive = false;
-                  continue;
-                }
-                // Right pinch in empty space → start back-swipe tracking
+                // Right pinch in empty space → start back-swipe (bubbles use index tap)
                 _backSwipeActive = true;
                 _backSwipeStart.copy(p.pinchPoint);
               }
@@ -468,38 +398,14 @@ export function initScene() {
               wm.onPinchStart(handIdx, p.pinchPoint);
             }
           } else if (p.pinching && s.pinching && p.pinchPoint) {
-            // Move grabbed bubble along Z while pinching
-            if (_draggedBubble && src.handedness === 'right') {
-              // Bubble tracks hand freely in 3D (offset preserved from grab start)
-              _draggedBubble.position.copy(p.pinchPoint).add(_dragGrabOffset);
-            } else {
-              wm.onPinchMove(handIdx, p.pinchPoint);
-            }
+            wm.onPinchMove(handIdx, p.pinchPoint);
           } else if (!p.pinching && s.pinching) {
             s.pinching = false;
-            // Resolve grab-drag on release
-            if (_draggedBubble && src.handedness === 'right') {
-              // Compute pull distance toward camera (direction-independent)
-              const xrCamR = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-              const camPosR = new THREE.Vector3();
-              xrCamR.getWorldPosition(camPosR);
-              const endCamDist = p.pinchPoint ? p.pinchPoint.distanceTo(camPosR) : _dragStartCamDist;
-              const dr = _dragStartCamDist - endCamDist; // positive = pulled toward camera
-              if (dr > DRAG_OPEN_THRESHOLD) {
-                bubbleMgr.openBubble(_draggedBubble);           // pull 5cm toward self → open/enter
-              } else {
-                _draggedBubble.position.copy(_dragOriginalPos); // small move → cancel
-                _draggedBubble.userData.scaleTarget = 1;
-              }
-              _draggedBubble = null;
-            } else {
-              wm.onPinchEnd(handIdx);
-              // Back-swipe: right hand pinch + swipe left 10cm → go back
-              if (src.handedness === 'right' && _backSwipeActive) {
-                _backSwipeActive = false;
-                if (p.pinchPoint && (p.pinchPoint.x - _backSwipeStart.x) < -0.10) {
-                  bubbleMgr.navigateBack();
-                }
+            wm.onPinchEnd(handIdx);
+            if (src.handedness === 'right' && _backSwipeActive) {
+              _backSwipeActive = false;
+              if (p.pinchPoint && (p.pinchPoint.x - _backSwipeStart.x) < -0.10) {
+                bubbleMgr.navigateBack();
               }
             }
           }
@@ -517,8 +423,13 @@ export function initScene() {
 
           if (handedness === 'right') {
             // Detect flat open right palm: all fingers extended + wide spread (>4cm index→pinky)
+            // ALSO require palm to be very horizontal (palmNormal.y > 0.65 ≈ within ~50° of flat)
             const rightPalm = htDetectPalmOpen(src, frame, ref, 'right', renderer);
             let rawPalmOpen = rightPalm.open;
+            if (rawPalmOpen) {
+              // Must be truly flat — palm facing up, not sideways
+              if (!rightPalm.palmNormal || rightPalm.palmNormal.y < 0.65) rawPalmOpen = false;
+            }
             if (rawPalmOpen) {
               const _idxTip = getJointPos(src, 'index-finger-tip', frame, ref);
               const _pkyTip = getJointPos(src, 'pinky-finger-tip', frame, ref);
@@ -605,8 +516,8 @@ export function initScene() {
             // Velocity persists — momentum continues after fist release
           }
 
-          // Track index finger tips for CodeCity touch detection
-          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+          // Track index finger tips for CodeCity touch detection (smoothed)
+          const indexTip = getIndexTipSmoothed(src, frame, ref, handIdx);
           if (indexTip) {
             if (!codeCity._fingerTips) codeCity._fingerTips = [];
             codeCity._fingerTips[handIdx] = { pos: indexTip, handedness: handedness };
@@ -615,30 +526,48 @@ export function initScene() {
           // Hand hover
           wm.updateHandHover(handIdx, indexTip);
 
-          // ── Right hand laser pointer (only when not pinching, not doing voice, not dragging) ──
+          // ── Right hand: index-finger press to open + laser pointer ──
           if (handedness === 'right') {
             const isVoiceActive = handAnimState[handIdx].wasOpen;
-            const showLaser = !s.pinching && !isVoiceActive && !_draggedBubble && indexTip;
-            if (showLaser && bubbleMgr.isVisible()) {
-              const indexProx = getJointPos(src, 'index-finger-phalanx-proximal', frame, ref);
-              const laserDir = indexProx
-                ? indexTip.clone().sub(indexProx).normalize()
-                : new THREE.Vector3(0, 0, -1);
-              const hit = bubbleMgr.findBubbleByRay(indexTip, laserDir);
-              _laserTargetBubble = (hit && !hit.userData.inPalm) ? hit : null;
-              const endPt = hit ? hit.position.clone() : indexTip.clone().addScaledVector(laserDir, 2.5);
-              // Position the laser beam quad: place at indexTip, orient toward endPt
-              _laserLine.position.copy(indexTip);
-              _laserLine.lookAt(endPt);
-              const beamLen = indexTip.distanceTo(endPt);
-              _laserLine.scale.set(1, 1, beamLen);
-              _laserMat.uniforms.uBrightness.value = hit ? 0.95 : 0.55;
-              if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
-              _laserLine.visible = true;
-            } else {
-              _laserLine.visible = false;
-              if (s.pinching) _laserTargetBubble = null;
+            // Index tap: finger must be CLOSE to target (6cm), not at distance
+            const now = performance.now();
+            if (!indexTip || s.pinching || isVoiceActive) {
+              _indexPressTarget = null;
+              _indexPressFrames = 0;
+            } else if (now >= _indexTapCooldownUntil) {
+              // 1. Window close button (finger within 6cm)
+              let target = wm.getIndexTapTarget(indexTip);
+              // 2. Bubble — finger must be IN FRONT of it (within 6cm), no ray-from-distance
+              if (!target && bubbleMgr.isVisible()) {
+                target = bubbleMgr.findBubbleAtPosition(indexTip, INDEX_PRESS_DIST);
+              }
+
+              if (target) {
+                const sameTarget = target === _indexPressTarget ||
+                  (target.type === 'close' && _indexPressTarget?.type === 'close' && target.win === _indexPressTarget.win);
+                if (sameTarget) {
+                  _indexPressFrames++;
+                  if (_indexPressFrames >= INDEX_PRESS_FRAMES) {
+                    if (target.type === 'close') {
+                      target.win.close();
+                    } else {
+                      bubbleMgr.openBubble(target);
+                    }
+                    _indexPressTarget = null;
+                    _indexPressFrames = 0;
+                    _indexTapCooldownUntil = now + INDEX_TAP_COOLDOWN_MS;
+                  }
+                } else {
+                  _indexPressTarget = target;
+                  _indexPressFrames = 1;
+                }
+              } else {
+                _indexPressTarget = null;
+                _indexPressFrames = 0;
+              }
             }
+
+
           }
         }
       }

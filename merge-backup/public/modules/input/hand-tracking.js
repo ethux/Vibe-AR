@@ -61,14 +61,40 @@ function detectPalmOpen(inputSource, frame, refSpace, handedness, renderer) {
   const camPos = new THREE.Vector3(); xrCam.getWorldPosition(camPos);
   const facingCam = palmNormal.dot(camPos.clone().sub(palmCenter).normalize()) > 0.1;
   const isOpen = extCount >= 3 && spread && (palmNormal.y > 0.25 || facingCam);
-  return { open: isOpen, palmCenter };
+  return { open: isOpen, palmCenter, palmNormal: palmNormal.clone() };
 }
 
-function detectPinch(inputSource, frame, refSpace) {
+// Smoothing state per hand (reduces hand-tracking jitter)
+const _smoothedPinch = [new THREE.Vector3(), new THREE.Vector3()];
+const _smoothedIndex = [new THREE.Vector3(), new THREE.Vector3()];
+const _hasSmoothed = [{ pinch: false, index: false }, { pinch: false, index: false }];
+const SMOOTH_ALPHA = 0.35;
+
+function smoothPosition(handIdx, rawPos, type, alpha = SMOOTH_ALPHA) {
+  if (!rawPos || handIdx < 0 || handIdx > 1) return rawPos;
+  const s = type === 'pinch' ? _smoothedPinch[handIdx] : _smoothedIndex[handIdx];
+  const has = _hasSmoothed[handIdx][type];
+  if (!has) { s.copy(rawPos); _hasSmoothed[handIdx][type] = true; return s.clone(); }
+  s.lerp(rawPos, alpha);
+  return s.clone();
+}
+
+function resetSmoothState(handIdx, type) {
+  if (handIdx >= 0 && handIdx <= 1) _hasSmoothed[handIdx][type] = false;
+}
+
+function detectPinch(inputSource, frame, refSpace, handIdx = 0) {
   const thumbTip = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
   const indexTip = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
-  if (!thumbTip || !indexTip) return { pinching: false, pinchPoint: null };
-  return { pinching: thumbTip.distanceTo(indexTip) < 0.025, pinchPoint: thumbTip.clone().lerp(indexTip, 0.5) };
+  if (!thumbTip || !indexTip) {
+    if (handIdx >= 0) resetSmoothState(handIdx, 'pinch');
+    return { pinching: false, pinchPoint: null };
+  }
+  const raw = thumbTip.clone().lerp(indexTip, 0.5);
+  const pinching = thumbTip.distanceTo(indexTip) < 0.025;
+  if (!pinching) resetSmoothState(handIdx, 'pinch');
+  const pinchPoint = pinching ? smoothPosition(handIdx, raw, 'pinch') : raw;
+  return { pinching, pinchPoint };
 }
 
 function detectFist(inputSource, frame, refSpace) {
@@ -115,4 +141,13 @@ function detectPointing(inputSource, frame, refSpace) {
   return indexExtended && middleCurled && ringCurled && pinkyCurled && notPinching;
 }
 
-export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist, detectPointing };
+function getIndexTipSmoothed(inputSource, frame, refSpace, handIdx = 0) {
+  const raw = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  if (!raw) {
+    if (handIdx >= 0) resetSmoothState(handIdx, 'index');
+    return null;
+  }
+  return smoothPosition(handIdx, raw, 'index');
+}
+
+export { HAND_JOINTS, getJointPos, getIndexTipSmoothed, detectPalmOpen, detectPinch, detectFist, detectPointing, resetSmoothState };

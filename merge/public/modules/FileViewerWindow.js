@@ -359,7 +359,8 @@ class FileViewerWindow {
     const win = this.wm.createWindow(editorOpts);
 
     // ── Content interaction handler (scroll, cursor) ──
-    const SCROLL_SENSITIVITY = 0.01; // meters per line
+    const SCROLL_SENSITIVITY = 0.015;  // meters per line (moins sensible = plus fluide)
+    const SCROLL_DEAD_ZONE = 0.004;   // ignorer les micro-mouvements (jitter main)
 
     // Helper to place cursor from a local-space hit point
     const placeCursorFromLocal = (localPoint) => {
@@ -399,6 +400,8 @@ class FileViewerWindow {
         state.scrollAccum = 0;
       } else if (phase === 'move' && data) {
         // data.y is the projected scroll delta along the window's up axis
+        // Zone morte : ignorer les micro-mouvements (jitter du hand tracking)
+        if (Math.abs(data.y) < SCROLL_DEAD_ZONE) return;
         state.scrollAccum += data.y;
         const lineDelta = Math.round(state.scrollAccum / SCROLL_SENSITIVITY);
         if (lineDelta !== 0) {
