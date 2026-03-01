@@ -10,13 +10,14 @@ import chatRoutes from './routes/chat.js';
 import transcribeRoutes from './routes/transcribe.js';
 import ttsRoutes from './routes/tts.js';
 import debugRoutes from './routes/debug.js';
-import mistralProxyRoutes from './routes/mistral-proxy.js';
+import mistralProxyRoutes, { setupTtsPushWs } from './routes/mistral-proxy.js';
 import companionProxyRoutes, { companionProxy } from './routes/companion-proxy.js';
 import codecityProxyRoutes from './routes/codecity-proxy.js';
 import sceneControlRoutes, { setupSceneControlWs } from './routes/scene-control.js';
 import gitRoutes from './routes/git.js';
 import devserverProxyRoutes from './routes/devserver-proxy.js';
 import previewStreamRoutes, { setupPreviewStreamWs } from './routes/preview-stream.js';
+import { setupTranscribeRealtimeWs } from './routes/transcribe-realtime.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -72,15 +73,21 @@ try {
 const proxy = setupTerminalProxy(app, server, TTYD_URL);
 const sceneControl = setupSceneControlWs(server);
 const previewStream = setupPreviewStreamWs(server);
+const transcribeRealtime = setupTranscribeRealtimeWs(server);
+const ttsPush = setupTtsPushWs(server);
 
-// WebSocket upgrade: scene-control + preview-stream + companion file watcher + terminal
+// WebSocket upgrade: scene-control + preview-stream + transcribe + tts-push + companion + terminal
 server.on('upgrade', (req, socket, head) => {
   if (req.url === '/ws/scene-control') {
     sceneControl.upgrade(req, socket, head);
   } else if (req.url === '/ws/preview-stream') {
     previewStream.upgrade(req, socket, head);
+  } else if (req.url === '/ws/transcribe') {
+    transcribeRealtime.upgrade(req, socket, head);
+  } else if (req.url === '/ws/tts') {
+    ttsPush.upgrade(req, socket, head);
   } else if (req.url.startsWith('/api/companion/ws/')) {
-    req.url = req.url.replace('/api/companion', '/api');
+    req.url = req.url.replace('/api/companion', '');
     companionProxy.ws(req, socket, head);
   }
   // terminal upgrade handled by setupTerminalProxy
@@ -98,8 +105,12 @@ httpServer.on('upgrade', (req, socket, head) => {
     sceneControl.upgrade(req, socket, head);
   } else if (req.url === '/ws/preview-stream') {
     previewStream.upgrade(req, socket, head);
+  } else if (req.url === '/ws/transcribe') {
+    transcribeRealtime.upgrade(req, socket, head);
+  } else if (req.url === '/ws/tts') {
+    ttsPush.upgrade(req, socket, head);
   } else if (req.url.startsWith('/api/companion/ws/')) {
-    req.url = req.url.replace('/api/companion', '/api');
+    req.url = req.url.replace('/api/companion', '');
     companionProxy.ws(req, socket, head);
   } else if (req.url.startsWith('/terminal')) {
     req.url = req.url.replace(/^\/terminal/, '');
