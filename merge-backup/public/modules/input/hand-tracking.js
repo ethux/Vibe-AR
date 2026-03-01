@@ -91,6 +91,34 @@ function detectFist(inputSource, frame, refSpace) {
   return { fisting: curled >= 3, wristPos: wrist };
 }
 
+function detectGrab(inputSource, frame, refSpace) {
+  const wrist      = getJointPos(inputSource, 'wrist', frame, refSpace);
+  const thumbTip   = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
+  const indexTip   = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  const middleTip  = getJointPos(inputSource, 'middle-finger-tip', frame, refSpace);
+  const ringTip    = getJointPos(inputSource, 'ring-finger-tip', frame, refSpace);
+  const pinkyTip   = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
+  const indexProx  = getJointPos(inputSource, 'index-finger-phalanx-proximal', frame, refSpace);
+  const middleProx = getJointPos(inputSource, 'middle-finger-phalanx-proximal', frame, refSpace);
+  const ringProx   = getJointPos(inputSource, 'ring-finger-phalanx-proximal', frame, refSpace);
+  const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
+  if (!wrist || !thumbTip || !indexTip || !middleTip || !ringTip || !pinkyTip
+      || !indexProx || !middleProx || !ringProx || !pinkyProx) {
+    return { grabbing: false, grabCenter: null };
+  }
+  // All 4 fingers curled (tip closer to wrist than proximal)
+  const allCurled =
+    indexTip.distanceTo(wrist)  < indexProx.distanceTo(wrist)  * 0.95 &&
+    middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 0.95 &&
+    ringTip.distanceTo(wrist)   < ringProx.distanceTo(wrist)   * 0.95 &&
+    pinkyTip.distanceTo(wrist)  < pinkyProx.distanceTo(wrist)  * 0.95;
+  // Thumb tucked in
+  const thumbTucked = thumbTip.distanceTo(indexProx) < 0.06;
+  const isGrabbing = allCurled && thumbTucked;
+  const grabCenter = wrist.clone().lerp(middleTip, 0.4);
+  return { grabbing: isGrabbing, grabCenter };
+}
+
 function detectPointing(inputSource, frame, refSpace) {
   const wrist      = getJointPos(inputSource, 'wrist', frame, refSpace);
   const indexTip   = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
@@ -115,4 +143,4 @@ function detectPointing(inputSource, frame, refSpace) {
   return indexExtended && middleCurled && ringCurled && pinkyCurled && notPinching;
 }
 
-export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist, detectPointing };
+export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist, detectGrab, detectPointing };

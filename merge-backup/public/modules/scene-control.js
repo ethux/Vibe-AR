@@ -100,6 +100,7 @@ function _dispatch(cmd) {
         };
         if (cmd.position) winOpts.position = cmd.position;
         const win = wm.createWindow(winOpts);
+        win._openedByAgent = true; // Tag as agent-opened for hide_window
         // Draw content text
         const ctx = win.contentCtx;
         ctx.fillStyle = '#0c0c12';
@@ -120,6 +121,24 @@ function _dispatch(cmd) {
 
     case 'terminal_command':
       _runTerminalCommand(cmd.command);
+      break;
+
+    case 'show_terminal':
+      _showTerminalWindow(cmd.title, cmd.position);
+      break;
+
+    // ── Window management commands ──
+    case 'list_windows':
+      _handleListWindows();
+      break;
+
+    case 'hide_window':
+      _handleHideWindow(cmd.windowId);
+      break;
+
+    // ── Preview commands ──
+    case 'refresh_preview':
+      _handleRefreshPreview();
       break;
 
     // ── File visualization commands ──
@@ -205,6 +224,7 @@ function _showNotification(message, duration = 3, color = '#FF7000') {
     canvasHeight: 80,
     closable: true,
   });
+  win._openedByAgent = true;
 
   const ctx = win.contentCtx;
   ctx.fillStyle = '#0c0c12';
@@ -228,5 +248,99 @@ async function _runTerminalCommand(command) {
     });
   } catch (e) {
     log(`[SCENE-CTRL] Terminal command failed: ${e.message}`);
+  }
+}
+
+// ── Show terminal window (iframe to ttyd) ──
+
+function _showTerminalWindow(title, position) {
+  const { wm } = handlers;
+  if (!wm) return;
+
+  const win = wm.createWindow({
+    title: title || 'Terminal Output',
+    width: 0.7,
+    height: 0.5,
+    position: position || [0.5, 1.3, -0.6],
+    canvasWidth: 800,
+    canvasHeight: 500,
+    closable: true,
+  });
+  win._openedByAgent = true;
+
+  const ctx = win.contentCtx;
+  ctx.fillStyle = '#0c0c12';
+  ctx.fillRect(0, 0, win.CANVAS_W, win.CANVAS_H);
+  ctx.fillStyle = '#FF7000';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('Terminal — live output', 12, 28);
+  ctx.fillStyle = '#888';
+  ctx.font = '13px monospace';
+  ctx.fillText('Connect to /terminal/ for full interactive session', 12, 52);
+  win.markContentDirty();
+}
+
+// ── Window management ──
+
+function _handleListWindows() {
+  const { wm } = handlers;
+  if (!wm) return;
+
+  const windowList = wm.windows
+    .filter(w => !w.closed)
+    .map((w, i) => ({
+      id: i,
+      title: w.title || 'Untitled',
+      openedByAgent: !!w._openedByAgent,
+      minimized: !!w.minimized,
+    }));
+
+  log(`[SCENE-CTRL] Windows: ${JSON.stringify(windowList)}`);
+
+  // Send the list back to the server so MCP gets it
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ ack: 'list_windows', windows: windowList, timestamp: Date.now() }));
+  }
+}
+
+function _handleHideWindow(windowId) {
+  const { wm } = handlers;
+  if (!wm) return;
+
+  const openWindows = wm.windows.filter(w => !w.closed);
+  const win = openWindows[windowId];
+
+  if (!win) {
+    log(`[SCENE-CTRL] hide_window: no window with id ${windowId}`);
+    return;
+  }
+
+  // Only auto-hide if the window was opened by the agent
+  if (win._openedByAgent) {
+    wm.closeWindow ? wm.closeWindow(win) : win.close();
+    log(`[SCENE-CTRL] Closed agent window: ${win.title}`);
+  } else {
+    // User-opened window — show a notification instead of closing
+    log(`[SCENE-CTRL] Window "${win.title}" was not opened by agent — skipping auto-hide`);
+    _showNotification(`Cannot auto-hide "${win.title}" — user-opened window`, 3, '#FF4444');
+  }
+}
+
+// ── Preview refresh ──
+
+async function _handleRefreshPreview() {
+  const { livePreview } = handlers;
+
+  // Ask the server to reload the Puppeteer page
+  try {
+    await fetch('/api/devserver/refresh-preview', { method: 'POST' });
+    log('[SCENE-CTRL] Preview refresh requested');
+  } catch (e) {
+    log(`[SCENE-CTRL] Preview refresh failed: ${e.message}`);
+  }
+
+  // If livePreview is active, notify
+  if (livePreview && livePreview._port) {
+    _showNotification('Preview refreshed', 2, '#00E676');
   }
 }

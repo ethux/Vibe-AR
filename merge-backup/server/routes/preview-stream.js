@@ -120,6 +120,21 @@ router.post('/api/devserver/stop-stream', async (req, res) => {
   res.json({ status: 'stopped' });
 });
 
+// Refresh the preview page (reload in Puppeteer)
+router.post('/api/devserver/refresh-preview', async (req, res) => {
+  if (!page || page.isClosed()) {
+    return res.status(404).json({ error: 'No active preview stream' });
+  }
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
+    console.log('[PREVIEW-STREAM] Page refreshed');
+    res.json({ status: 'refreshed', url: streamUrl });
+  } catch (e) {
+    console.error('[PREVIEW-STREAM] Refresh failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get stream status
 router.get('/api/devserver/stream-status', (req, res) => {
   res.json({
