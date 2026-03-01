@@ -36,7 +36,15 @@ When you edit or create files, use `scene_highlight_file` to visually show the c
 
 When the user asks to organize, sort, order, or rearrange files — ALWAYS call `scene_arrange_files` with appropriate layout/groupBy/sortBy. When the user asks to move a specific file, use `scene_move_file_bubble`.
 
-When you need to start a dev server AND show a preview, use `scene_run_and_preview` — it runs the command in the terminal and opens the live preview in one step. Example: `scene_run_and_preview("npm run dev", 5173)`. If the server is already running, use `scene_open_preview` with the port. Use `scene_refresh_preview` after making code changes to reload.
+When you need to start a dev server AND show a preview, use `scene_run_and_preview`.
+CRITICAL: You are inside Docker. Dev servers MUST bind to 0.0.0.0 or the preview will fail.
+ALWAYS include the host flag in the command you pass:
+- Vite: `scene_run_and_preview("npm run dev -- --host 0.0.0.0", 5173)`
+- Next.js: `scene_run_and_preview("npm run dev -- -H 0.0.0.0", 3000)`
+- Angular: `scene_run_and_preview("ng serve --host 0.0.0.0", 4200)`
+- Python: `scene_run_and_preview("python -m http.server 8080", 8080)` (default 0.0.0.0)
+- Generic: always add `--host 0.0.0.0` or equivalent
+If the server is already running, use `scene_open_preview` with the port. Use `scene_refresh_preview` after making code changes to reload.
 
 ## Examples
 
