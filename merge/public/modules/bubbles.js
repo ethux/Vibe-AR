@@ -571,16 +571,14 @@ class FileBubbleManager {
     return false;
   }
 
-  // Left hand: pinch free bubble → add to palm context; pinch palm bubble → remove from context
-  handleLeftPinch(pinchPoint) {
-    // Free bubble first (radius 12cm) → add to context (only when explorer is open)
+  // Left hand: pinch free bubble → add to palm context (add only, no removal)
+  handleLeftPinchAdd(pinchPoint) {
+    if (!this._explorerVisible) return false;
     let closest = null, cd = 0.12;
-    if (this._explorerVisible) {
-      for (const b of this.fileBubbles) {
-        if (b.userData.inPalm) continue;
-        const d = pinchPoint.distanceTo(b.position);
-        if (d < cd) { cd = d; closest = b; }
-      }
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
     }
     if (closest) {
       closest.userData.inPalm = true;
@@ -590,7 +588,11 @@ class FileBubbleManager {
       this.palmBubbles.push(closest);
       return true;
     }
-    // Palm bubble → remove from context (pinch-only, fist guard is in scene.js)
+    return false;
+  }
+
+  // Right hand: pinch palm bubble → remove from context
+  handleRightPinchRemove(pinchPoint) {
     let pc = null, pd = 0.08, pi = -1;
     this.palmBubbles.forEach((b, i) => {
       const d = pinchPoint.distanceTo(b.position);

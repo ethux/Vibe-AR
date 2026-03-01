@@ -1,6 +1,8 @@
 // ─── AR session with DOM overlay for keyboard input ───
-import { getRenderer, setXrSession } from './state.js';
+import { getRenderer, setXrSession, setActiveSplash } from './state.js';
 import { log } from './logging.js';
+import { createStartupSplash } from './startup-splash.js';
+import { getScene } from './scene.js';
 
 export async function startARSession() {
   if (!navigator.xr) throw new Error('No WebXR');
@@ -28,6 +30,13 @@ export async function startARSession() {
 
   document.getElementById('overlay')?.classList.add('hidden');
   document.body.classList.add('ar-active');
+
+  // ── Startup splash ──
+  // getScene() is already initialised (initScene() ran in main.js before this)
+  const splashScene = getScene();
+  if (splashScene) {
+    setActiveSplash(createStartupSplash(splashScene, renderer));
+  }
 
   session.addEventListener('end', () => {
     setXrSession(null);

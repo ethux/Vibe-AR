@@ -56,10 +56,10 @@ function remap(t, a, b) { return clamp01((t - a) / (b - a)); }
 // Faithfully reproduces the SVG: 140×140 body, 3 color bands, 2 square eyes
 // with rounded-rect clip, jump/squash/stretch/eye physics.
 // t = animation progress 0→1, mode = 'idle' | 'recording' | 'listening'
-function drawMascot(ctx, t, canvasSize, mode) {
+function drawMascot(ctx, t, canvasW, canvasH, mode) {
   mode = mode || 'idle';
-  const S = canvasSize;
-  ctx.clearRect(0, 0, S, S);
+  const S = canvasW;
+  ctx.clearRect(0, 0, canvasW, canvasH);
 
   // ── Scale factor: map SVG body (140px) to canvas ──
   // We want the character to fill most of the canvas nicely.
@@ -81,12 +81,12 @@ function drawMascot(ctx, t, canvasSize, mode) {
 
   // ── Compute jump translateY ──
   let jumpY = 0;
-  // Peak: ~65% of canvas height upward (big visible jump)
-  const peakPx = -(S * 0.62);
+  // Peak: ~38% of canvas height upward (fits within taller canvas)
+  const peakPx = -(canvasH * 0.38);
 
   if (t < 0.15) {
     // Wind-up: tiny downward push
-    jumpY = lerp(0, S * 0.015, remap(t, 0, 0.15));
+    jumpY = lerp(0, canvasH * 0.015, remap(t, 0, 0.15));
   } else if (t < 0.40) {
     const p = easeOut(remap(t, 0.15, 0.40));
     jumpY = lerp(0, peakPx, p);
@@ -186,8 +186,8 @@ function drawMascot(ctx, t, canvasSize, mode) {
   }
 
   // ── Canvas layout ──
-  // Ground sits at ~78% down the canvas so there's room above for the full jump arc
-  const groundY = S * 0.78;
+  // Ground sits at ~85% down the tall canvas so there's room above for the full jump arc
+  const groundY = canvasH * 0.85;
   // Pivot = bottom-center of body at rest
   const pivotX  = S / 2;
   const pivotY  = groundY;
@@ -309,7 +309,8 @@ class AnimationManager {
       console.warn('AnimationManager: only "mascot-bounce" is built-in.');
     }
 
-    const RES    = 512;
+    const RES_W  = 512;
+    const RES_H  = 768;  // taller canvas so jump arc doesn't clip at top
     const WIDTH  = overrides.width   ?? 0.11;  // meters
     const HEIGHT = overrides.height  ?? 0.11;
     const DUR    = overrides.duration ?? 2.5;  // seconds
@@ -319,15 +320,15 @@ class AnimationManager {
 
     // Canvas + texture
     const canvas = document.createElement('canvas');
-    canvas.width = RES; canvas.height = RES;
+    canvas.width = RES_W; canvas.height = RES_H;
     const ctx = canvas.getContext('2d');
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    // Plane mesh
-    const geo = new THREE.PlaneGeometry(WIDTH, HEIGHT);
+    // Plane mesh — height scaled to match canvas aspect ratio (512×768 = 1:1.5)
+    const geo = new THREE.PlaneGeometry(WIDTH, HEIGHT * (RES_H / RES_W));
     const mat = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
@@ -341,7 +342,7 @@ class AnimationManager {
     this.scene.add(mesh);
 
     // Draw first frame immediately so it doesn't pop in blank
-    drawMascot(ctx, 0, RES, MODE);
+    drawMascot(ctx, 0, RES_W, RES_H, MODE);
     texture.needsUpdate = true;
 
     const inst = {
@@ -355,10 +356,13 @@ class AnimationManager {
       stopping: false,
       finished: false,
       mode: MODE,
-      res: RES,
+      res: RES_W,
+      resH: RES_H,
+      visScale: 1,
 
       moveTo(pos) { this.origin.copy(pos); },
       setMode(m) { this.mode = m; },
+      setVisScale(v) { this.visScale = Math.max(0, Math.min(1, v)); },
       stop()  { this.stopping = true; },
       fastHide(dur) { this.fadeOut = dur ?? 0.08; this.stopping = true; },
       kill()  { this.finished = true; },
@@ -396,19 +400,16 @@ class AnimationManager {
       } else {
         inst.opacity = 1;
       }
-      inst.mesh.material.opacity = inst.opacity;
+      inst.mesh.material.opacity = inst.opacity * inst.visScale;
 
-      // Redraw canvas — loop for recording/listening, clamp for idle
-      let t = inst.time / inst.duration;
-      if (t > 1.0) {
-        t = t % 1.0;  // always loop the bounce
-      }
-      drawMascot(inst.ctx, t, inst.res, inst.mode);
+      // Redraw canvas — play once and hold last frame
+      const t = Math.min(1.0, inst.time / inst.duration);
+      drawMascot(inst.ctx, t, inst.res, inst.resH, inst.mode);
       inst.texture.needsUpdate = true;
 
-      // Position + billboard
+      // Position + billboard — scale driven by visScale for palm-close shrink
       inst.mesh.position.copy(inst.origin);
-      inst.mesh.scale.set(1, 1, 1);
+      inst.mesh.scale.set(inst.visScale, inst.visScale, 1);
       if (camera) inst.mesh.quaternion.copy(camera.quaternion);
     }
   }
