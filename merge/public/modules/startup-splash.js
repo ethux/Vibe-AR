@@ -169,7 +169,7 @@ export function createStartupSplash(scene, renderer) {
     else if (elapsed < T_OVERLAY_END) {
       textMesh.visible = false;
       const t = clamp01((elapsed - T_BLAST_END) / (T_OVERLAY_END - T_BLAST_END));
-      overlayMat.opacity = lerp(1.0, 0.0, easeOutCubic(t));
+      overlayMat.opacity = lerp(1.0, 0, easeOutCubic(t));
     }
 
     // ── Done ──

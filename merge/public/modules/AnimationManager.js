@@ -192,16 +192,16 @@ function drawMascot(ctx, t, canvasW, canvasH, mode) {
   const pivotX  = S / 2;
   const pivotY  = groundY;
 
-  // ── Shadow ──
-  ctx.save();
-  ctx.globalAlpha = shadowOpacity;
-  const sRx = (bodyW * 0.38) * shadowScale;
-  const sRy = (bodyH * 0.065) * shadowScale;
-  ctx.beginPath();
-  ctx.ellipse(pivotX, groundY + sRy * 0.6, sRx, sRy, 0, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fill();
-  ctx.restore();
+  // ── Shadow (disabled) ──
+  // ctx.save();
+  // ctx.globalAlpha = shadowOpacity;
+  // const sRx = (bodyW * 0.38) * shadowScale;
+  // const sRy = (bodyH * 0.065) * shadowScale;
+  // ctx.beginPath();
+  // ctx.ellipse(pivotX, groundY + sRy * 0.6, sRx, sRy, 0, 0, Math.PI * 2);
+  // ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  // ctx.fill();
+  // ctx.restore();
 
   // ── Body with squash/stretch (clipped rounded rect) ──
   ctx.save();
@@ -332,9 +332,9 @@ class AnimationManager {
     const mat = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
-      opacity: 0,
+      opacity: 1,
       side: THREE.DoubleSide,
-      depthWrite: false,
+      depthWrite: true,
       alphaTest: 0.01,
     });
     const mesh = new THREE.Mesh(geo, mat);
