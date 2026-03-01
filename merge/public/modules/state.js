@@ -17,6 +17,13 @@ export function setTerm(v) { term = v; }
 export function getTermWs() { return termWs; }
 export function setTermWs(v) { termWs = v; }
 
+// ─── Project-level state (explorer toggle, etc.) ───
+let projectState = {
+  explorerOpen: false,
+};
+export function getProjectState() { return projectState; }
+export function setProjectState(key, val) { projectState[key] = val; }
+
 // Window size in meters
 export const WIN_W = 0.8;
 export const WIN_H = 0.55;
