@@ -8,8 +8,8 @@ import { log } from '../core/logging.js';
 
 // Ports to poll for running dev servers
 const POLL_PORTS = [3000, 5173, 8080, 8000, 4200, 5000, 8888, 9000];
-const POLL_INTERVAL = 2000; // ms — fast polling
-const HEALTH_CHECK_INTERVAL = 3000; // ms — check if active server is still up
+const POLL_INTERVAL = 5000; // ms — poll for new dev servers
+const HEALTH_CHECK_INTERVAL = 5000; // ms — check if active server is still up
 const MAX_RECONNECT_FAILURES = 3; // close window after N consecutive WS failures
 
 class LivePreviewManager {
@@ -32,6 +32,7 @@ class LivePreviewManager {
     this._lastFrameBlob = null;
     this._reconnectTimer = null;
     this._reconnectFailures = 0;
+    this._healthFailures = 0;
     this._healthTimer = null;
 
     // Start polling for dev servers
@@ -54,8 +55,17 @@ class LivePreviewManager {
     if (this._port && this._win && !this._win.closed) {
       const stillUp = await this._checkHealth(this._port);
       if (!stillUp) {
-        log(`[PREVIEW] Dev server on port ${this._port} went down — closing preview`);
-        this._autoClose(); // does NOT add to _dismissed, so it can reopen
+        this._healthFailures++;
+        log(`[PREVIEW] Health check FAILED for port ${this._port} (${this._healthFailures}/3)`);
+        if (this._healthFailures >= 3) {
+          log(`[PREVIEW] Dev server on port ${this._port} went down (3 consecutive failures) — closing preview`);
+          this._autoClose(); // does NOT add to _dismissed, so it can reopen
+        }
+      } else {
+        if (this._healthFailures > 0) {
+          log(`[PREVIEW] Health check OK for port ${this._port} (was ${this._healthFailures} failures, resetting)`);
+        }
+        this._healthFailures = 0;
       }
     }
 
@@ -88,7 +98,7 @@ class LivePreviewManager {
   async _checkHealth(port) {
     try {
       const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 1000);
+      const tid = setTimeout(() => ctrl.abort(), 2000);
       const res = await fetch(`/api/devserver/${port}/health`, { signal: ctrl.signal });
       clearTimeout(tid);
       const data = await res.json();
@@ -100,6 +110,7 @@ class LivePreviewManager {
 
   // Auto-close when server goes down (NOT user-dismissed — can reopen)
   _autoClose() {
+    log(`[PREVIEW] _autoClose: port=${this._port}, hasWin=${!!this._win}`);
     this._disconnectWs();
     this._stopStream();
     if (this._win && !this._win.closed) {
@@ -108,6 +119,7 @@ class LivePreviewManager {
     this._win = null;
     this._port = null;
     this._reconnectFailures = 0;
+    this._healthFailures = 0;
   }
 
   // Keep detectServer for backward compat (scene.js calls it)
@@ -116,23 +128,29 @@ class LivePreviewManager {
   // ── Open preview: start page stream + 3D window ───────────────
 
   async openPreview(port) {
+    log(`[PREVIEW] openPreview called: port=${port}, currentPort=${this._port}, hasWin=${!!this._win}, dismissed=${this._dismissed.has(port)}`);
     if (this._win && this._port === port) return;
     if (this._dismissed.has(port)) return;
 
     // Close existing
-    if (this._win) this.closePreview();
+    if (this._win) {
+      log('[PREVIEW] Closing existing preview window');
+      this.closePreview();
+    }
 
     this._port = port;
 
     // Start the page capture stream on the server
+    log(`[PREVIEW] Requesting start-stream for port ${port}...`);
     try {
+      const t0 = performance.now();
       const resp = await fetch('/api/devserver/start-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ port }),
       });
       const data = await resp.json();
-      log(`[PREVIEW] Stream started: ${JSON.stringify(data)}`);
+      log(`[PREVIEW] start-stream response in ${(performance.now() - t0).toFixed(0)}ms: ${JSON.stringify(data)}`);
     } catch (e) {
       log(`[PREVIEW] Failed to start stream: ${e.message}`);
       // Continue anyway — stream might already be running or user runs stream_page.py manually
@@ -142,9 +160,9 @@ class LivePreviewManager {
     const self = this;
     this._win = this.wm.createWindow({
       title:    `LIVE PREVIEW :${port}`,
-      width:    0.8,
-      height:   0.6,
-      position: [0.95, 1.4, -0.45],
+      width:    0.6,
+      height:   0.45,
+      position: [0.35, 1.4, -0.6],
       canvasWidth:  1280,
       canvasHeight: 960,
       closable: true,
@@ -183,6 +201,7 @@ class LivePreviewManager {
     };
 
     // Connect WebSocket to page capture stream
+    log(`[PREVIEW] Window created, connecting WebSocket...`);
     this._connectWs();
 
     log(`[PREVIEW] Opened live preview for port ${port}`);
@@ -195,6 +214,7 @@ class LivePreviewManager {
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${proto}://${window.location.host}/ws/preview-stream`;
+    log(`[PREVIEW] Connecting WebSocket to ${url}`);
 
     try {
       this._ws = new WebSocket(url);
@@ -214,6 +234,11 @@ class LivePreviewManager {
         this._frameCount++;
         this._fpsFrames++;
 
+        // Log first frame and then every 100th
+        if (this._frameCount === 1 || this._frameCount % 100 === 0) {
+          log(`[PREVIEW] Frame #${this._frameCount}, size=${(evt.data.byteLength / 1024).toFixed(1)}KB`);
+        }
+
         const blob = new Blob([evt.data], { type: 'image/jpeg' });
         const objectUrl = URL.createObjectURL(blob);
 
@@ -230,10 +255,11 @@ class LivePreviewManager {
         this._img.src = objectUrl;
       };
 
-      this._ws.onclose = () => {
+      this._ws.onclose = (ev) => {
         this._connected = false;
         this._ws = null;
         this._reconnectFailures++;
+        log(`[PREVIEW] WebSocket closed: code=${ev.code} reason="${ev.reason}" clean=${ev.wasClean} (failure ${this._reconnectFailures}/${MAX_RECONNECT_FAILURES})`);
 
         if (this._reconnectFailures >= MAX_RECONNECT_FAILURES) {
           log(`[PREVIEW] ${MAX_RECONNECT_FAILURES} consecutive WS failures — checking server health`);
@@ -242,7 +268,7 @@ class LivePreviewManager {
               log('[PREVIEW] Server confirmed down — auto-closing preview');
               this._autoClose();
             } else {
-              // Server is up but WS keeps failing — keep trying
+              log('[PREVIEW] Server is up but WS keeps failing — resetting counter, retrying');
               this._reconnectFailures = 0;
               this._scheduleReconnect();
             }
@@ -257,9 +283,11 @@ class LivePreviewManager {
         this._scheduleReconnect();
       };
 
-      this._ws.onerror = () => {};
+      this._ws.onerror = (ev) => {
+        log(`[PREVIEW] WebSocket error event`);
+      };
     } catch (e) {
-      log('[PREVIEW] WebSocket failed: ' + e.message);
+      log('[PREVIEW] WebSocket construction failed: ' + e.message);
       this._connected = false;
       this._ws = null;
       this._scheduleReconnect();
@@ -267,6 +295,7 @@ class LivePreviewManager {
   }
 
   _disconnectWs() {
+    log(`[PREVIEW] _disconnectWs called (hasWs=${!!this._ws}, hasTimer=${!!this._reconnectTimer})`);
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
@@ -284,17 +313,24 @@ class LivePreviewManager {
 
   _scheduleReconnect() {
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+    log('[PREVIEW] Scheduling WebSocket reconnect in 1s');
     this._reconnectTimer = setTimeout(() => {
       if (this._win && !this._win.closed) {
         this._connectWs();
+      } else {
+        log('[PREVIEW] Reconnect skipped — window closed');
       }
     }, 1000);
   }
 
   async _stopStream() {
+    log('[PREVIEW] Sending stop-stream request');
     try {
       await fetch('/api/devserver/stop-stream', { method: 'POST' });
-    } catch {}
+      log('[PREVIEW] stop-stream OK');
+    } catch (e) {
+      log(`[PREVIEW] stop-stream failed: ${e.message}`);
+    }
   }
 
   // ── Draw frame onto the 3D window canvas ───────────────────
@@ -369,10 +405,12 @@ class LivePreviewManager {
   }
 
   closePreview() {
+    log(`[PREVIEW] closePreview called: port=${this._port}`);
     this._disconnectWs();
     this._stopStream();
     if (this._win && !this._win.closed) {
       this._dismissed.add(this._port); // user-initiated: stay dismissed
+      log(`[PREVIEW] Port ${this._port} added to dismissed set`);
       try { this._win.close(); } catch {}
     }
     this._win = null;

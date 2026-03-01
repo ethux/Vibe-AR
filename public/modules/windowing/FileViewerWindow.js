@@ -43,6 +43,10 @@ class FileViewerWindow {
     const width = opts.width || 0.8;
     const height = opts.height || 0.6;
 
+    // Prevent duplicate windows for the same file
+    const existing = this._windows.find(h => h.filePath === filePath && h.window && !h.window.closed);
+    if (existing) return existing;
+
     if (isImage) {
       return this._openImageWindow(filename, content, position, width, height);
     } else {
@@ -119,7 +123,7 @@ class FileViewerWindow {
     };
     img.src = src;
 
-    const handle = { window: win, getContent: () => src, setContent: () => {} };
+    const handle = { window: win, filePath: filename, getContent: () => src, setContent: () => {} };
     this._windows.push(handle);
     return handle;
   }
@@ -460,6 +464,7 @@ class FileViewerWindow {
       window: win,
       state: state,
       filename: filename,
+      filePath: filePath,
       _refreshTimer: null,
 
       /** Get the current editor content */

@@ -58,14 +58,24 @@ def scene_show_file_change(
 def scene_arrange_files(
     layout: str = "arc",
     group_by: str = "type",
+    sort_by: str = "name",
 ) -> str:
-    """Rearrange file bubbles in the AR view using a spatial layout.
-    layout: 'arc' (default semicircle), 'grid' (flat grid), 'cluster' (grouped clusters).
-    group_by: 'type' (folders/code/config/docs), 'extension' (by file extension), 'name' (alphabetical).
-    Use this when the user wants to organize or reorganize their file view."""
+    """Organize, sort, and rearrange the file bubbles in the AR view.
+    ALWAYS use this tool when the user asks to organize, sort, order, or rearrange files.
+
+    layout: 'arc' (semicircle around user), 'grid' (flat grid), 'cluster' (grouped clusters).
+    group_by: 'type' (folders/code/config/docs), 'extension' (by file ext), 'name' (alphabetical), 'size' (large/medium/small).
+    sort_by: 'name' (alphabetical), 'size' (largest first), 'extension' (by file type).
+
+    Examples:
+    - "organize by type" → layout='arc', group_by='type'
+    - "sort by size" → layout='grid', group_by='size', sort_by='size'
+    - "order by name" → layout='grid', group_by='name', sort_by='name'
+    - "group by extension" → layout='cluster', group_by='extension'"""
     return json.dumps(send_scene_command("arrange_files", {
         "layout": layout,
         "groupBy": group_by,
+        "sortBy": sort_by,
     }))
 
 

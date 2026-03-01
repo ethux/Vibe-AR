@@ -34,20 +34,26 @@ async function getPuppeteer() {
 router.post('/api/devserver/start-stream', async (req, res) => {
   const { port, url } = req.body;
   const targetUrl = url || `http://vibe-terminal:${port}/`;
+  console.log(`[PREVIEW-STREAM] start-stream request: port=${port} url=${targetUrl}`);
 
   if (browser && streamUrl === targetUrl) {
+    console.log(`[PREVIEW-STREAM] Stream already running for ${targetUrl}`);
     return res.json({ status: 'already-running', url: streamUrl });
   }
 
   // Stop existing stream
+  console.log('[PREVIEW-STREAM] Stopping existing stream (if any)...');
   await stopStream();
 
   const puppeteer = await getPuppeteer();
   if (!puppeteer) {
+    console.error('[PREVIEW-STREAM] puppeteer import failed — not installed');
     return res.status(500).json({ error: 'puppeteer not available' });
   }
 
   try {
+    console.log('[PREVIEW-STREAM] Launching Puppeteer browser...');
+    const t0 = Date.now();
     browser = await puppeteer.default.launch({
       headless: true,
       args: [
@@ -60,21 +66,27 @@ router.post('/api/devserver/start-stream', async (req, res) => {
         '--single-process',
       ],
     });
+    console.log(`[PREVIEW-STREAM] Browser launched in ${Date.now() - t0}ms`);
 
     page = await browser.newPage();
     await page.setViewport({ width: WIDTH, height: HEIGHT });
+    console.log(`[PREVIEW-STREAM] Page created, viewport set to ${WIDTH}x${HEIGHT}`);
 
     console.log(`[PREVIEW-STREAM] Navigating to ${targetUrl}...`);
+    const t1 = Date.now();
     try {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      console.log(`[PREVIEW-STREAM] Navigation complete in ${Date.now() - t1}ms`);
     } catch (e) {
-      console.log(`[PREVIEW-STREAM] Initial nav: ${e.message}, will retry on next frame`);
+      console.log(`[PREVIEW-STREAM] Initial nav failed after ${Date.now() - t1}ms: ${e.message}, will retry on next frame`);
     }
 
     streamUrl = targetUrl;
 
     // Start capture loop
     const interval = 1000 / FPS;
+    let frameCount = 0;
+    let lastLogTime = Date.now();
     captureInterval = setInterval(async () => {
       if (!page || page.isClosed()) return;
       try {
@@ -84,6 +96,13 @@ router.post('/api/devserver/start-stream', async (req, res) => {
           fullPage: false,
         });
         latestFrame = screenshot;
+        frameCount++;
+
+        // Log every 30 seconds
+        if (Date.now() - lastLogTime > 30000) {
+          console.log(`[PREVIEW-STREAM] Capture running: ${frameCount} frames, ${viewers.size} viewers, frame=${(screenshot.length / 1024).toFixed(1)}KB`);
+          lastLogTime = Date.now();
+        }
 
         // Broadcast to all connected viewers
         const dead = [];
@@ -94,21 +113,29 @@ router.post('/api/devserver/start-stream', async (req, res) => {
             dead.push(ws);
           }
         }
-        dead.forEach(ws => viewers.delete(ws));
+        if (dead.length > 0) {
+          dead.forEach(ws => viewers.delete(ws));
+          console.log(`[PREVIEW-STREAM] Removed ${dead.length} dead viewer(s), ${viewers.size} remaining`);
+        }
       } catch (e) {
+        console.warn(`[PREVIEW-STREAM] Screenshot failed: ${e.message}`);
         // Page might have navigated, try to recover
         try {
           if (page && !page.isClosed()) {
+            console.log(`[PREVIEW-STREAM] Attempting page recovery → ${streamUrl}`);
             await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+            console.log('[PREVIEW-STREAM] Page recovered');
           }
-        } catch {}
+        } catch (re) {
+          console.error(`[PREVIEW-STREAM] Recovery failed: ${re.message}`);
+        }
       }
     }, interval);
 
-    console.log(`[PREVIEW-STREAM] Started Puppeteer capture for ${targetUrl}`);
+    console.log(`[PREVIEW-STREAM] Started capture loop at ${FPS}fps for ${targetUrl}, ${viewers.size} viewer(s) waiting`);
     res.json({ status: 'started', url: targetUrl });
   } catch (err) {
-    console.error('[PREVIEW-STREAM] Failed to start:', err.message);
+    console.error('[PREVIEW-STREAM] Failed to start:', err.message, err.stack);
     await stopStream();
     res.status(500).json({ error: err.message });
   }
@@ -116,18 +143,22 @@ router.post('/api/devserver/start-stream', async (req, res) => {
 
 // Stop page capture stream
 router.post('/api/devserver/stop-stream', async (req, res) => {
+  console.log('[PREVIEW-STREAM] stop-stream request received');
   await stopStream();
   res.json({ status: 'stopped' });
 });
 
 // Refresh the preview page (reload in Puppeteer)
 router.post('/api/devserver/refresh-preview', async (req, res) => {
+  console.log('[PREVIEW-STREAM] refresh-preview request received');
   if (!page || page.isClosed()) {
+    console.warn('[PREVIEW-STREAM] No active page to refresh');
     return res.status(404).json({ error: 'No active preview stream' });
   }
   try {
+    const t0 = Date.now();
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
-    console.log('[PREVIEW-STREAM] Page refreshed');
+    console.log(`[PREVIEW-STREAM] Page refreshed in ${Date.now() - t0}ms`);
     res.json({ status: 'refreshed', url: streamUrl });
   } catch (e) {
     console.error('[PREVIEW-STREAM] Refresh failed:', e.message);
@@ -137,24 +168,29 @@ router.post('/api/devserver/refresh-preview', async (req, res) => {
 
 // Get stream status
 router.get('/api/devserver/stream-status', (req, res) => {
-  res.json({
+  const status = {
     running: !!browser,
     url: streamUrl,
     viewers: viewers.size,
-  });
+    hasLatestFrame: !!latestFrame,
+    frameSize: latestFrame ? latestFrame.length : 0,
+  };
+  console.log(`[PREVIEW-STREAM] stream-status: ${JSON.stringify(status)}`);
+  res.json(status);
 });
 
 async function stopStream() {
+  console.log(`[PREVIEW-STREAM] Stopping stream... (browser=${!!browser}, page=${!!page}, interval=${!!captureInterval})`);
   if (captureInterval) {
     clearInterval(captureInterval);
     captureInterval = null;
   }
   if (page) {
-    try { await page.close(); } catch {}
+    try { await page.close(); } catch (e) { console.warn(`[PREVIEW-STREAM] page.close error: ${e.message}`); }
     page = null;
   }
   if (browser) {
-    try { await browser.close(); } catch {}
+    try { await browser.close(); } catch (e) { console.warn(`[PREVIEW-STREAM] browser.close error: ${e.message}`); }
     browser = null;
   }
   streamUrl = null;

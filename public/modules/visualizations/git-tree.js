@@ -55,6 +55,10 @@ class GitTreeRenderer {
     // Polling for realtime updates
     this._pollTimer = null;
     this._lastSnapshot = '';  // hash of HEAD + branch list to detect changes
+
+    // Visibility state (hidden by default, toggled via MCP or UI)
+    this._visible = false;
+    this.treeGroup.visible = false;
   }
 
   _log(msg) {
@@ -129,6 +133,7 @@ class GitTreeRenderer {
       // Render the tree
       this.clearTree();
       this.renderTree();
+      this.show();
       this._log(`Rendered ${this.commitMeshes.length} commit spheres`);
 
       // Start polling for realtime updates
@@ -1146,6 +1151,31 @@ class GitTreeRenderer {
       this._detailWindow.close();
       this._detailWindow = null;
     }
+  }
+
+  // ── Visibility toggle ────────────────────────────────────────
+
+  show() {
+    if (this._visible) return;
+    this._visible = true;
+    this.treeGroup.visible = true;
+    this._log('Shown');
+  }
+
+  hide() {
+    if (!this._visible) return;
+    this._visible = false;
+    this.treeGroup.visible = false;
+    this._log('Hidden');
+  }
+
+  toggle() {
+    if (this._visible) this.hide();
+    else this.show();
+  }
+
+  isVisible() {
+    return this._visible;
   }
 
   destroy() {
