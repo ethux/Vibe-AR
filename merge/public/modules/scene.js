@@ -11,7 +11,7 @@ import { makeTextTexture } from './textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
+import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist, detectPointing } from './hand-tracking.js';
 import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
@@ -179,21 +179,50 @@ export function initScene() {
 
   // ── Hand tracking (using imported gesture detection) ──
   const hs = [
-    { pinching: false, palmOpen: false, palmOpenSmooth: 0, lastGestureTime: 0 },
-    { pinching: false, palmOpen: false, palmOpenSmooth: 0, lastGestureTime: 0 },
+    { pinching: false },
+    { pinching: false },
   ];
 
   // Per-hand mascot animation state
+  // pointFrames: debounce counter — must reach POINT_THRESHOLD before triggering
+  const POINT_THRESHOLD = 8;
   const handAnimState = [
-    { active: null, wasOpen: false },  // left
-    { active: null, wasOpen: false },  // right
+    { active: null, wasOpen: false, pointFrames: 0 }, // left
+    { active: null, wasOpen: false, pointFrames: 0 }, // right
   ];
 
   // Per-hand grab state for CodeCity
   const prevGrabState = [false, false];
 
-  // Gesture cooldown (ms)
-  const GESTURE_COOLDOWN = 600;
+  // Back-swipe state (right hand pinch in empty space + 7cm move → go back)
+  let _backSwipeActive = false;
+  const _backSwipeStart = new THREE.Vector3();
+
+  // Fist rotation state (right hand) — physics-based with momentum
+  let _fistRotating = false;
+  let _fistLastX    = 0;
+  let _rotVelocity  = 0;          // current angular velocity (dx units/frame)
+  const ROT_FRICTION = 0.97;      // deceleration per frame after fist release (~1.5s coast)
+  const ROT_ACCEL    = 0.35;      // lerp factor toward target velocity (responsiveness)
+  const ROT_MAX      = 0.035;     // velocity cap to avoid wild spinning
+  const ROT_STOP     = 0.00008;   // below this, snap to zero
+
+  // Grab-drag state (right hand pinch on bubble → bubble tracks hand; pull 5cm + release = open)
+  let _draggedBubble         = null;
+  const _dragGrabOffset      = new THREE.Vector3(); // bubble pos − pinch pos at grab start
+  let _dragStartCamDist      = 0;                   // distance camera→pinch at grab start
+  const _dragOriginalPos     = new THREE.Vector3();
+  const DRAG_OPEN_THRESHOLD  = 0.05;  // 5cm closer to camera → open/enter
+
+  // ── Hand laser pointer (right hand index finger → distant bubble targeting) ──
+  const _laserGeo = new THREE.BufferGeometry();
+  _laserGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,0,-2.5], 3));
+  const _laserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.55, depthTest: false });
+  const _laserLine = new THREE.Line(_laserGeo, _laserMat);
+  _laserLine.visible = false;
+  _laserLine.renderOrder = 999;
+  scene.add(_laserLine);
+  let _laserTargetBubble = null; // bubble currently aimed at by the laser
 
   // ── Render loop ──
   renderer.setAnimationLoop((ts, frame) => {
@@ -250,20 +279,77 @@ export function initScene() {
                 tmpRay.ray.direction.set(0, 0, -1);
                 if (gitTree.handleRaycast(tmpRay)) continue;
               }
-              // Check file bubbles
-              if (bubbleMgr.handlePinch(p.pinchPoint)) continue;
+              // Check file bubbles — left/right distinction
+              if (src.handedness === 'left') {
+                if (bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
+              } else {
+                // Right hand: grab-drag — laser target first, then proximity, then camera ray
+                let grabbed = _laserTargetBubble
+                  || bubbleMgr.findClosestFreeBubble(p.pinchPoint);
+                if (!grabbed) {
+                  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+                  const camPos = new THREE.Vector3();
+                  xrCam.getWorldPosition(camPos);
+                  const rayDir = p.pinchPoint.clone().sub(camPos);
+                  grabbed = bubbleMgr.findBubbleByRay(camPos, rayDir);
+                }
+                if (grabbed) {
+                  _draggedBubble = grabbed;
+                  _dragGrabOffset.copy(grabbed.position).sub(p.pinchPoint);
+                  _dragOriginalPos.copy(grabbed.position);
+                  const _grabCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+                  const _grabCamPos = new THREE.Vector3();
+                  _grabCam.getWorldPosition(_grabCamPos);
+                  _dragStartCamDist = p.pinchPoint.distanceTo(_grabCamPos);
+                  grabbed.userData.scaleTarget = 1.15;
+                  _backSwipeActive = false;
+                  continue;
+                }
+                // Right pinch in empty space → start back-swipe tracking
+                _backSwipeActive = true;
+                _backSwipeStart.copy(p.pinchPoint);
+              }
               // Fall through to WindowManager
               wm.onPinchStart(handIdx, p.pinchPoint);
             }
           } else if (p.pinching && s.pinching && p.pinchPoint) {
-            wm.onPinchMove(handIdx, p.pinchPoint);
+            // Move grabbed bubble along Z while pinching
+            if (_draggedBubble && src.handedness === 'right') {
+              // Bubble tracks hand freely in 3D (offset preserved from grab start)
+              _draggedBubble.position.copy(p.pinchPoint).add(_dragGrabOffset);
+            } else {
+              wm.onPinchMove(handIdx, p.pinchPoint);
+            }
           } else if (!p.pinching && s.pinching) {
             s.pinching = false;
-            wm.onPinchEnd(handIdx);
+            // Resolve grab-drag on release
+            if (_draggedBubble && src.handedness === 'right') {
+              // Compute pull distance toward camera (direction-independent)
+              const xrCamR = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+              const camPosR = new THREE.Vector3();
+              xrCamR.getWorldPosition(camPosR);
+              const endCamDist = p.pinchPoint ? p.pinchPoint.distanceTo(camPosR) : _dragStartCamDist;
+              const dr = _dragStartCamDist - endCamDist; // positive = pulled toward camera
+              if (dr > DRAG_OPEN_THRESHOLD) {
+                bubbleMgr.openBubble(_draggedBubble);           // pull 5cm toward self → open/enter
+              } else {
+                _draggedBubble.position.copy(_dragOriginalPos); // small move → cancel
+                _draggedBubble.userData.scaleTarget = 1;
+              }
+              _draggedBubble = null;
+            } else {
+              wm.onPinchEnd(handIdx);
+              // Back-swipe: right hand pinch + swipe left 10cm → go back
+              if (src.handedness === 'right' && _backSwipeActive) {
+                _backSwipeActive = false;
+                if (p.pinchPoint && (p.pinchPoint.x - _backSwipeStart.x) < -0.10) {
+                  bubbleMgr.navigateBack();
+                }
+              }
+            }
           }
 
           // ── Palm open/close → mascot character + voice control (RIGHT HAND ONLY) ──
-          const now = performance.now();
           const handedness = src.handedness || (handIdx === 0 ? 'left' : 'right');
 
           // ── Left hand palm tracking → file bubble orbit ──
@@ -275,64 +361,64 @@ export function initScene() {
           }
 
           if (handedness === 'right') {
-            const palmResult = htDetectPalmOpen(src, frame, ref, handedness, renderer);
-            s.palmOpen = palmResult.open;
+            const rawPointing = detectPointing(src, frame, ref);
             const anim = handAnimState[handIdx];
 
-            // Palm just opened → spawn mascot + start recording
-            if (s.palmOpen && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-              s.lastGestureTime = now;
-              // Spawn mascot above palm
+            // Debounce: increment counter while pointing, reset instantly on stop
+            if (rawPointing) {
+              anim.pointFrames = Math.min(anim.pointFrames + 1, POINT_THRESHOLD + 1);
+            } else {
+              anim.pointFrames = 0;
+            }
+            const isPointing = anim.pointFrames >= POINT_THRESHOLD;
+
+            // Index held long enough → spawn mascot + start recording
+            if (isPointing && !anim.wasOpen) {
+              anim.wasOpen = true;
               if (anim.active) { anim.active.kill(); anim.active = null; }
-              const spawnPos = palmResult.palmCenter
-                ? palmResult.palmCenter.clone()
-                : new THREE.Vector3(0, 1.4, -0.5);
+              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+              const spawnPos = indexTip ? indexTip.clone() : new THREE.Vector3(0, 1.4, -0.5);
               spawnPos.y += 0.08;
               anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'idle' });
-              log(`[HAND] right palm OPENED — mascot spawned, starting recording`);
-              // Start recording
-              if (!getIsRecording()) {
-                startRecording();
-              }
+              log('[HAND] right index pointed — recording started');
+              if (!getIsRecording()) startRecording();
             }
 
-            // While palm open, follow hand (always orange)
-            if (s.palmOpen && anim.active && palmResult.palmCenter) {
-              const followPos = palmResult.palmCenter.clone();
-              followPos.y += 0.08;
-              anim.active.moveTo(followPos);
+            // While pointing, mascot follows index tip
+            if (isPointing && anim.active) {
+              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+              if (indexTip) { const fp = indexTip.clone(); fp.y += 0.08; anim.active.moveTo(fp); }
             }
 
-            // Palm closed (any reason) → hide mascot + stop recording or TTS
-            if (!s.palmOpen && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-              s.lastGestureTime = now;
-              // Hide mascot
-              if (anim.active) {
-                anim.active.fastHide(0.08);
-                anim.active = null;
-              }
-              if (getIsRecording()) {
-                log(`[HAND] right palm CLOSED — stopping recording`);
-                stopRecording();
-              }
-              // Always kill TTS on palm close (cancels polling + playback)
-              log(`[HAND] right palm CLOSED — stopping TTS`);
+            // Index lowered → hide mascot + stop recording/TTS
+            if (!isPointing && anim.wasOpen) {
+              anim.wasOpen = false;
+              if (anim.active) { anim.active.fastHide(0.08); anim.active = null; }
+              if (getIsRecording()) { log('[HAND] right index folded — recording stopped'); stopRecording(); }
               stopTTS();
             }
-
-            anim.wasOpen = s.palmOpen;
           }
 
-          // ── Fist detection → CodeCity grab interaction ──
+          // ── Fist detection → CodeCity grab + right hand rotates bubbles ──
           const fistResult = detectFist(src, frame, ref);
           if (fistResult.fisting && !prevGrabState[handIdx]) {
             prevGrabState[handIdx] = true;
             if (fistResult.wristPos) codeCity.onGrabStart(handIdx, fistResult.wristPos);
+            if (src.handedness === 'right') { _fistRotating = true; _fistLastX = fistResult.wristPos?.x ?? 0; }
           } else if (fistResult.fisting && prevGrabState[handIdx]) {
             if (fistResult.wristPos) codeCity.onGrabMove(handIdx, fistResult.wristPos);
+            if (src.handedness === 'right' && _fistRotating && fistResult.wristPos) {
+              const dx = fistResult.wristPos.x - _fistLastX;
+              _fistLastX = fistResult.wristPos.x;
+              // Accelerate smoothly toward target velocity (clamp to max)
+              const target = Math.max(-ROT_MAX, Math.min(ROT_MAX, dx));
+              _rotVelocity += (target - _rotVelocity) * ROT_ACCEL;
+            }
           } else if (!fistResult.fisting && prevGrabState[handIdx]) {
             prevGrabState[handIdx] = false;
             codeCity.onGrabEnd(handIdx);
+            if (src.handedness === 'right') _fistRotating = false;
+            // Velocity persists — momentum continues after fist release
           }
 
           // Track index finger tips for CodeCity touch detection
@@ -344,8 +430,42 @@ export function initScene() {
 
           // Hand hover
           wm.updateHandHover(handIdx, indexTip);
+
+          // ── Right hand laser pointer (only when not pinching, not doing voice, not dragging) ──
+          if (handedness === 'right') {
+            const isVoiceActive = handAnimState[handIdx].wasOpen;
+            const showLaser = !s.pinching && !isVoiceActive && !_draggedBubble && indexTip;
+            if (showLaser) {
+              const indexProx = getJointPos(src, 'index-finger-phalanx-proximal', frame, ref);
+              const laserDir = indexProx
+                ? indexTip.clone().sub(indexProx).normalize()
+                : new THREE.Vector3(0, 0, -1);
+              const hit = bubbleMgr.findBubbleByRay(indexTip, laserDir);
+              _laserTargetBubble = (hit && !hit.userData.inPalm) ? hit : null;
+              const endPt = hit ? hit.position.clone() : indexTip.clone().addScaledVector(laserDir, 2.5);
+              const pos = _laserLine.geometry.attributes.position;
+              pos.setXYZ(0, indexTip.x, indexTip.y, indexTip.z);
+              pos.setXYZ(1, endPt.x, endPt.y, endPt.z);
+              pos.needsUpdate = true;
+              _laserMat.color.setHex(hit ? 0xffffff : 0x00ffff);
+              _laserMat.opacity = hit ? 0.85 : 0.45;
+              if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
+              _laserLine.visible = true;
+            } else {
+              _laserLine.visible = false;
+              if (s.pinching) _laserTargetBubble = null;
+            }
+          }
         }
       }
+    }
+
+    // ── Fist rotation physics — apply once per frame outside inputSources loop ──
+    if (!_fistRotating) _rotVelocity *= ROT_FRICTION;  // coast + decelerate when released
+    if (Math.abs(_rotVelocity) > ROT_STOP) {
+      bubbleMgr.rotateBubbles(_rotVelocity);
+    } else {
+      _rotVelocity = 0;  // snap to rest
     }
 
     // WindowManager update (hover, drag, resize animations, billboarding)
