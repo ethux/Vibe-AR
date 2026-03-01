@@ -17,6 +17,11 @@ export function setTerm(v) { term = v; }
 export function getTermWs() { return termWs; }
 export function setTermWs(v) { termWs = v; }
 
+// ─── Startup splash instance (driven by render loop in scene.js) ───
+let activeSplash = null;
+export function getActiveSplash() { return activeSplash; }
+export function setActiveSplash(v) { activeSplash = v; }
+
 // ─── Project-level state (explorer toggle, etc.) ───
 let projectState = {
   explorerOpen: false,
