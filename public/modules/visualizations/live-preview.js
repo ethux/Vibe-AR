@@ -34,6 +34,7 @@ class LivePreviewManager {
     this._reconnectFailures = 0;
     this._healthFailures = 0;
     this._healthTimer = null;
+    this._openedAt = 0; // timestamp of last openPreview — grace period for health checks
 
     // Start polling for dev servers
     this._startPolling();
@@ -53,19 +54,34 @@ class LivePreviewManager {
 
     // If we have an active preview, check if that server is still up
     if (this._port && this._win && !this._win.closed) {
-      const stillUp = await this._checkHealth(this._port);
-      if (!stillUp) {
-        this._healthFailures++;
-        log(`[PREVIEW] Health check FAILED for port ${this._port} (${this._healthFailures}/3)`);
-        if (this._healthFailures >= 3) {
-          log(`[PREVIEW] Dev server on port ${this._port} went down (3 consecutive failures) — closing preview`);
-          this._autoClose(); // does NOT add to _dismissed, so it can reopen
-        }
+      // Grace period: skip health checks for 30s after opening (npm install + server boot)
+      const age = Date.now() - this._openedAt;
+      if (age < 30000) {
+        // Silent during grace period — don't spam logs
       } else {
-        if (this._healthFailures > 0) {
-          log(`[PREVIEW] Health check OK for port ${this._port} (was ${this._healthFailures} failures, resetting)`);
+        // Also check if the capture stream is still running and sending frames
+        const streamOk = await this._checkStreamStatus();
+
+        if (streamOk) {
+          // Stream is running — don't close even if health check fails
+          // (Puppeteer handles its own retries)
+          this._healthFailures = 0;
+        } else {
+          const stillUp = await this._checkHealth(this._port);
+          if (!stillUp) {
+            this._healthFailures++;
+            log(`[PREVIEW] Health check FAILED for port ${this._port} (${this._healthFailures}/5)`);
+            if (this._healthFailures >= 5) {
+              log(`[PREVIEW] Dev server on port ${this._port} went down (5 consecutive failures, no stream) — closing preview`);
+              this._autoClose();
+            }
+          } else {
+            if (this._healthFailures > 0) {
+              log(`[PREVIEW] Health check OK for port ${this._port} (was ${this._healthFailures} failures, resetting)`);
+            }
+            this._healthFailures = 0;
+          }
         }
-        this._healthFailures = 0;
       }
     }
 
@@ -108,16 +124,46 @@ class LivePreviewManager {
     }
   }
 
+  // Check if the Puppeteer capture stream is still running
+  async _checkStreamStatus() {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 2000);
+      const res = await fetch('/api/devserver/stream-status', { signal: ctrl.signal });
+      clearTimeout(tid);
+      const data = await res.json();
+      return data.running === true;
+    } catch {
+      return false;
+    }
+  }
+
   // Auto-close when server goes down (NOT user-dismissed — can reopen)
   _autoClose() {
     log(`[PREVIEW] _autoClose: port=${this._port}, hasWin=${!!this._win}`);
     this._disconnectWs();
     this._stopStream();
+    // Close the window without triggering the dismiss hook
     if (this._win && !this._win.closed) {
+      this._win._isAutoClose = true;
       try { this._win.close(); } catch {}
     }
     this._win = null;
     this._port = null;
+    this._reconnectFailures = 0;
+    this._healthFailures = 0;
+  }
+
+  // Close just the window + WS, but do NOT send stop-stream.
+  // Used when switching ports so we don't kill the new stream.
+  _closeWindowOnly() {
+    log(`[PREVIEW] _closeWindowOnly: port=${this._port}`);
+    this._disconnectWs();
+    if (this._win && !this._win.closed) {
+      this._win._isInternalClose = true; // skip the close hook's stop-stream
+      try { this._win.close(); } catch {}
+    }
+    this._win = null;
     this._reconnectFailures = 0;
     this._healthFailures = 0;
   }
@@ -132,15 +178,19 @@ class LivePreviewManager {
     if (this._win && this._port === port) return;
     if (this._dismissed.has(port)) return;
 
-    // Close existing
+    // Close existing window WITHOUT sending stop-stream
+    // (start-stream for the new port will stop the old stream server-side)
     if (this._win) {
-      log('[PREVIEW] Closing existing preview window');
-      this.closePreview();
+      log('[PREVIEW] Closing existing preview window (port switch, no stop-stream)');
+      this._closeWindowOnly();
     }
 
     this._port = port;
+    this._healthFailures = 0;
+    this._openedAt = Date.now();
 
     // Start the page capture stream on the server
+    // (server-side start-stream stops any existing stream first)
     log(`[PREVIEW] Requesting start-stream for port ${port}...`);
     try {
       const t0 = performance.now();
@@ -153,7 +203,6 @@ class LivePreviewManager {
       log(`[PREVIEW] start-stream response in ${(performance.now() - t0).toFixed(0)}ms: ${JSON.stringify(data)}`);
     } catch (e) {
       log(`[PREVIEW] Failed to start stream: ${e.message}`);
-      // Continue anyway — stream might already be running or user runs stream_page.py manually
     }
 
     // Create 3D window via WindowManager
@@ -177,15 +226,21 @@ class LivePreviewManager {
     win._contentTex.minFilter = THREE.LinearFilter;
     win._contentTex.needsUpdate = true;
 
-    // Hook close to dismiss
+    // Hook close — only do cleanup if it's a user/UI close (not internal)
     const origClose = win.close.bind(win);
     win.close = () => {
-      this._dismissed.add(this._port);
-      this._disconnectWs();
-      this._stopStream();
+      if (!win._isInternalClose && !win._isAutoClose) {
+        // User closed via UI — dismiss + stop stream
+        log(`[PREVIEW] Window closed by user, dismissing port ${this._port}`);
+        this._dismissed.add(this._port);
+        this._disconnectWs();
+        this._stopStream();
+      }
       origClose();
-      this._win = null;
-      this._port = null;
+      if (!win._isInternalClose) {
+        this._win = null;
+        this._port = null;
+      }
     };
 
     // Hook update for FPS counter
@@ -406,12 +461,13 @@ class LivePreviewManager {
 
   closePreview() {
     log(`[PREVIEW] closePreview called: port=${this._port}`);
-    this._disconnectWs();
-    this._stopStream();
+    // Close the window — the close hook handles WS disconnect + stop-stream + dismiss
     if (this._win && !this._win.closed) {
-      this._dismissed.add(this._port); // user-initiated: stay dismissed
-      log(`[PREVIEW] Port ${this._port} added to dismissed set`);
       try { this._win.close(); } catch {}
+    } else {
+      // No window or already closed — clean up manually
+      this._disconnectWs();
+      this._stopStream();
     }
     this._win = null;
     this._port = null;
