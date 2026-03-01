@@ -1,4 +1,4 @@
-# Vibe AR — Vibecoding in Augmented Reality
+# Vibe AR — Vibecoding in Augmented Reality - Mistral AI World Wide Hackathon Paris 2026
 
 Vibecoding, but in AR. Put on a Meta Quest 3, talk to your AI coding assistant, and watch it build your app — all floating in front of you in mixed reality.
 
