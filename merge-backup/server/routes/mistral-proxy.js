@@ -6,7 +6,9 @@ import { Router } from 'express';
 import { WebSocketServer } from 'ws';
 
 const router = Router();
-const MISTRAL_API = 'https://api.mistral.ai';
+const MISTRAL_API = process.env.MISTRAL_API_URL || 'https://api.mistral.ai';
+const isLocalBackend = MISTRAL_API !== 'https://api.mistral.ai';
+console.log(`[PROXY] Backend: ${MISTRAL_API}${isLocalBackend ? ' (local)' : ' (cloud)'}`);
 
 // In-memory store for the latest assistant response
 let latestResponse = { text: '', ts: 0 };
@@ -104,7 +106,9 @@ function cleanForSpeech(text) {
 router.all('/mistral-proxy/*', async (req, res) => {
   const path = req.params[0];
   const targetUrl = `${MISTRAL_API}/${path}`;
-  const apiKey = process.env.MISTRAL_API_KEY;
+  const apiKey = isLocalBackend
+    ? (process.env.VLLM_API_KEY || process.env.MISTRAL_API_KEY)
+    : process.env.MISTRAL_API_KEY;
 
   const isPost = req.method === 'POST';
   const isStreaming = isPost && req.body?.stream === true;
