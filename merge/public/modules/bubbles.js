@@ -102,6 +102,9 @@ class FileBubbleManager {
     this._pollTimer = null;
     this._watchGen = 0;   // generation counter to prevent stale WS handlers
     this._lastEntryNames = new Set();
+    // Explorer visibility state
+    this._explorerVisible = false;
+    this._showAnim = null;  // { progress, direction: 'in'|'out' }
     // Bubbles pending spawn/remove animation
     this._spawning = [];  // { bubble, progress }
     this._removing = [];  // { bubble, progress }
@@ -146,8 +149,15 @@ class FileBubbleManager {
     // Filter out noisy/binary entries; keep useful dotfiles (.env, .gitignore…)
     entries = entries.filter(e => !NOISE.has(e.name));
 
-    entries.forEach((e, i) => {
-      const b = this._createBubble(e, i, entries.length);
+    // Skip entries already held in palm context for this directory
+    const palmNames = new Set(
+      this.palmBubbles
+        .filter(b => b.userData.parentDir === dirPath)
+        .map(b => b.userData.fileData?.name)
+    );
+    const spawnEntries = entries.filter(e => !palmNames.has(e.name));
+    spawnEntries.forEach((e, i) => {
+      const b = this._createBubble(e, i, spawnEntries.length);
       this._spawning.push({ bubble: b, progress: 0 });
     });
     this._lastEntryNames = new Set(entries.map(e => e.name));
@@ -231,9 +241,15 @@ class FileBubbleManager {
       }
     }
 
-    // Add bubbles for new files
+    // Add bubbles for new files (skip if already in palm context for this dir)
     const total = allEntries.length;
+    const palmNamesInDir = new Set(
+      this.palmBubbles
+        .filter(b => b.userData.parentDir === this.currentPath)
+        .map(b => b.userData.fileData?.name)
+    );
     for (const a of added) {
+      if (palmNamesInDir.has(a.name)) continue;
       const newIdx = allEntries.findIndex(e => e.name === a.name);
       const b = this._createBubble(a, newIdx >= 0 ? newIdx : this.fileBubbles.length, total);
       this._spawning.push({ bubble: b, progress: 0 });
@@ -298,7 +314,7 @@ class FileBubbleManager {
     const color = EXT_COLORS[ext] || (fileData.type === 'folder' ? 0xFF7000 : EXT_COLORS.default);
     const cardW = fileData.type === 'folder' ? 0.11 : 0.095;
     const group = new THREE.Group();
-    group.userData = { fileData, opened: false, color, cardW, index, spawnScale: 0 };
+    group.userData = { fileData, opened: false, color, cardW, index, spawnScale: 0, parentDir: this.currentPath };
 
     // Placeholder sprite (starts invisible, animated in)
     const placeholderMat = new THREE.SpriteMaterial({ color, transparent: true, opacity: 0, sizeAttenuation: true });
@@ -348,12 +364,62 @@ class FileBubbleManager {
     group.userData.bobAmp    = 0.008 + Math.random() * 0.012;
     group.userData.scaleTarget = 1;
 
+    // If explorer is hidden, keep bubble invisible until show() is called
+    if (!this._explorerVisible) {
+      if (group.userData.cardSprite) group.userData.cardSprite.visible = false;
+      if (group.userData.labelSprite) group.userData.labelSprite.visible = false;
+      if (group.userData.glowRing) group.userData.glowRing.visible = false;
+      group.visible = false;
+    }
+
     this.scene.add(group);
     this.fileBubbles.push(group);
     return group;
   }
 
   update(dt, elapsed) {
+    // Explorer show/hide animation
+    if (this._showAnim) {
+      this._showAnim.progress = Math.min(1, this._showAnim.progress + dt * 3); // ~0.33s
+      const t = this._showAnim.progress;
+      const ease = this._showAnim.direction === 'in'
+        ? 1 - Math.pow(1 - t, 3)   // ease-out cubic
+        : Math.pow(1 - t, 3);       // reverse ease (fade out)
+      this._applyExplorerOpacity(ease);
+      if (t >= 1) {
+        if (this._showAnim.direction === 'out') {
+          this._explorerVisible = false;
+          this._setAllBubblesVisible(false);
+        }
+        this._showAnim = null;
+      }
+      // Skip normal spawn/remove animations during show/hide
+      return;
+    }
+
+    if (!this._explorerVisible) {
+      // Explorer hidden — only keep palm bubbles orbiting, skip everything else
+      if (this.palmBubbles.length && this.leftPalmCenter) {
+        const elapsed2 = performance.now() / 1000;
+        for (const b of this.palmBubbles) {
+          const ud = b.userData;
+          const total = Math.max(this.palmBubbles.length, 1);
+          const r     = 0.042 + total * 0.010;
+          const angle = elapsed2 * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
+          const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
+          b.position.lerp(new THREE.Vector3(
+            this.leftPalmCenter.x + Math.cos(angle) * r,
+            this.leftPalmCenter.y + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
+            this.leftPalmCenter.z + Math.sin(angle) * Math.cos(tilt) * r
+          ), 0.15);
+          if (ud.cardSprite) ud.cardSprite.position.copy(b.position);
+          if (ud.labelSprite) ud.labelSprite.position.set(b.position.x, b.position.y - ud.cardW * 0.7, b.position.z);
+          if (ud.glowRing) { ud.glowRing.position.copy(b.position); ud.glowRing.position.z += 0.001; }
+        }
+      }
+      return;
+    }
+
     // Animate spawning bubbles (scale + fade in)
     for (let i = this._spawning.length - 1; i >= 0; i--) {
       const s = this._spawning[i];
@@ -425,7 +491,7 @@ class FileBubbleManager {
       // Palm orbit — move inPalm bubbles around leftPalmCenter
       if (ud.inPalm && this.leftPalmCenter) {
         const total = Math.max(this.palmBubbles.length, 1);
-        const r     = 0.07 + total * 0.018;
+        const r     = 0.042 + total * 0.010;
         const angle = elapsed * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
         const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
         b.position.lerp(new THREE.Vector3(
@@ -533,22 +599,24 @@ class FileBubbleManager {
 
   // Left hand: pinch free bubble → add to palm context; pinch palm bubble → remove from context
   handleLeftPinch(pinchPoint) {
-    // Free bubble first (radius 12cm) → add to context
+    // Free bubble first (radius 12cm) → add to context (only when explorer is open)
     let closest = null, cd = 0.12;
-    for (const b of this.fileBubbles) {
-      if (b.userData.inPalm) continue;
-      const d = pinchPoint.distanceTo(b.position);
-      if (d < cd) { cd = d; closest = b; }
+    if (this._explorerVisible) {
+      for (const b of this.fileBubbles) {
+        if (b.userData.inPalm) continue;
+        const d = pinchPoint.distanceTo(b.position);
+        if (d < cd) { cd = d; closest = b; }
+      }
     }
     if (closest) {
       closest.userData.inPalm = true;
-      closest.userData.scaleTarget = 0.5;
+      closest.userData.scaleTarget = 0.32;
       closest.userData.palmOrbitIndex = this.palmBubbles.length;
       closest.visible = true;
       this.palmBubbles.push(closest);
       return true;
     }
-    // Palm bubble (radius 8cm) → remove from context
+    // Palm bubble → remove from context (pinch-only, fist guard is in scene.js)
     let pc = null, pd = 0.08, pi = -1;
     this.palmBubbles.forEach((b, i) => {
       const d = pinchPoint.distanceTo(b.position);
@@ -556,14 +624,21 @@ class FileBubbleManager {
     });
     if (pc) {
       pc.userData.inPalm = false;
-      pc.userData.scaleTarget = 1;
-      // Animate back to original arc position (smooth fly-back)
-      pc.userData.targetPos = pc.userData.basePos.clone();
-      pc.userData.restPos.copy(pc.userData.basePos);
-      pc.visible = true;
       if (this.openedBubble === pc) this.openedBubble = null;
       this.palmBubbles.splice(pi, 1);
       this.palmBubbles.forEach((b, i) => { b.userData.palmOrbitIndex = i; });
+
+      if (pc.userData.parentDir === this.currentPath) {
+        // Same folder — fly back to arc position
+        pc.userData.scaleTarget = 1;
+        pc.userData.targetPos = pc.userData.basePos.clone();
+        pc.userData.restPos.copy(pc.userData.basePos);
+        pc.visible = true;
+      } else {
+        // Different folder — fade out and destroy
+        this.fileBubbles.splice(this.fileBubbles.indexOf(pc), 1);
+        this._removing.push({ bubble: pc, progress: 0 });
+      }
       return true;
     }
     return false;
@@ -748,6 +823,53 @@ class FileBubbleManager {
     bubble.userData._moveTarget = target;
     bubble.userData._moveStart = bubble.position.clone();
     bubble.userData._moveT = 0;
+  }
+
+  // ── Explorer visibility toggle ──────────────────────────
+
+  show() {
+    if (this._explorerVisible) return;
+    this._explorerVisible = true;
+    this._showAnim = { progress: 0, direction: 'in' };
+    // Make all bubbles visible so animation can start
+    for (const b of this.fileBubbles) {
+      if (b.userData.cardSprite) b.userData.cardSprite.visible = true;
+      if (b.userData.labelSprite) b.userData.labelSprite.visible = true;
+      if (b.userData.glowRing) b.userData.glowRing.visible = true;
+    }
+  }
+
+  hide() {
+    if (!this._explorerVisible) return;
+    this._showAnim = { progress: 0, direction: 'out' };
+    // _explorerVisible set to false when animation completes
+  }
+
+  isVisible() {
+    return this._explorerVisible;
+  }
+
+  _setAllBubblesVisible(v) {
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue; // palm context always stays visible
+      if (b.userData.cardSprite) b.userData.cardSprite.visible = v;
+      if (b.userData.labelSprite) b.userData.labelSprite.visible = v;
+      if (b.userData.glowRing) b.userData.glowRing.visible = v;
+      b.visible = v;
+    }
+  }
+
+  _applyExplorerOpacity(t) {
+    // t: 0 = fully hidden, 1 = fully visible
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const ud = b.userData;
+      const scale = t * ud.cardW;
+      if (ud.cardSprite) ud.cardSprite.scale.set(scale, scale, 1);
+      if (ud.cardMat) ud.cardMat.opacity = t * 0.9;
+      if (ud.labelMat) ud.labelMat.opacity = t;
+      if (ud.labelSprite) ud.labelSprite.scale.set(ud.cardW * 2.2 * t, ud.cardW * 0.42 * t, 1);
+    }
   }
 }
 

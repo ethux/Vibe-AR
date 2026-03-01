@@ -37,6 +37,12 @@ class ManagedWindow {
 
     this.hoverTarget = null;
 
+    // Fade/scale targets for explorer toggle
+    this._fadeOpacity = 1;
+    this._fadeScale = 1;
+    this._targetFadeOpacity = 1;
+    this._targetFadeScale = 1;
+
     this.CANVAS_W = opts.canvasWidth  || 512;
     this.CANVAS_H = opts.canvasHeight || 384;
 
@@ -425,10 +431,42 @@ class ManagedWindow {
     return [this.dragBarMesh]; // title bar = drag target in Win95
   }
 
+  // ── Fade/scale for explorer toggle ─────────────────────────
+  setFade(opacity, scale) {
+    this._targetFadeOpacity = opacity;
+    this._targetFadeScale = scale;
+  }
+
   // ── Per-frame update ───────────────────────────────────────
   update(dt, elapsed) {
     if (this.closed || !this.visible) return;
     this._updateHover(dt);
+    this._updateFade(dt);
+  }
+
+  _updateFade(dt) {
+    const speed = 6; // lerp speed (~0.17s to settle)
+    const k = Math.min(1, speed * dt);
+
+    // Lerp opacity
+    this._fadeOpacity += (this._targetFadeOpacity - this._fadeOpacity) * k;
+    // Lerp scale
+    this._fadeScale += (this._targetFadeScale - this._fadeScale) * k;
+
+    // Apply scale to root
+    this.root.scale.setScalar(this._fadeScale);
+
+    // Apply opacity to all materials
+    const opacity = this._fadeOpacity;
+    if (this._contentMat) this._contentMat.opacity = opacity;
+    if (this._titleMat) this._titleMat.opacity = opacity;
+    if (this._frameMat) {
+      this._frameMat.transparent = true;
+      this._frameMat.opacity = opacity;
+    }
+    for (const m of Object.values(this._borderMeshes)) {
+      if (m.material) { m.material.opacity = opacity * 0.9; }
+    }
   }
 
   _updateHover(dt) {

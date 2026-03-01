@@ -177,6 +177,10 @@ function _dispatch(cmd) {
       }
       break;
 
+    case 'toggle_explorer':
+      if (handlers.toggleExplorer) handlers.toggleExplorer();
+      break;
+
     default:
       log(`[SCENE-CTRL] Unknown action: ${action}`);
   }

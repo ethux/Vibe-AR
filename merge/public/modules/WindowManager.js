@@ -504,6 +504,20 @@ class WindowManager {
     this._resizeState.window = null;
   }
 
+  // ── Explorer toggle: fade/scale all windows ─────────────────
+
+  fadeAllWindows(opacity = 0.3, scale = 0.92) {
+    for (const win of this.windows) {
+      if (!win.closed) win.setFade(opacity, scale);
+    }
+  }
+
+  unfadeAllWindows() {
+    for (const win of this.windows) {
+      if (!win.closed) win.setFade(1, 1);
+    }
+  }
+
   // ── Per-frame update ──────────────────────────────────────────
 
   update(frame, dt, elapsed, controllers, activeCamera) {
