@@ -13,5 +13,5 @@ mcp = FastMCP(
 
 # Import all tool/resource modules so they register with `mcp`.
 # Order doesn't matter — each module just decorates functions.
-from vibe_ar.tools import git, scene, file_viz  # noqa: E402, F401
+from vibe_ar.tools import git, scene, file_viz, voices, models  # noqa: E402, F401
 from vibe_ar import resources  # noqa: E402, F401

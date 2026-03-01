@@ -41,16 +41,13 @@ class WindowManager {
     ];
     this._grabTwoHandAnchor = null;
 
+    // Ray-hovered window per controller index (updated every frame in update())
+    this._rayHoveredWindow = [null, null];
+
     // Content interaction state (per hand) — scroll/cursor within window content
     this._contentInteraction = [
       { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
       { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
-    ];
-
-    // Finger touch state (per hand) — index finger pushing into content to scroll
-    this._fingerTouchState = [
-      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
-      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
     ];
 
     // Controller content interaction state
@@ -64,6 +61,12 @@ class WindowManager {
       totalMove: 0,
       startDist: 0,
     };
+
+    // Finger touch state (per hand) — index finger pushing into content to scroll
+    this._fingerTouchState = [
+      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
+      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
+    ];
 
     // Resize state
     this._resizeState = {
@@ -464,7 +467,20 @@ class WindowManager {
       return true;
     }
 
-    // Grab nearest window — offset from hand so window doesn't snap
+    // Prefer the window the controller ray is currently pointing at
+    const rayWin = this._rayHoveredWindow && this._rayHoveredWindow[handIdx];
+    if (rayWin && !rayWin.closed && rayWin.visible) {
+      const gs = this._handGrabState[handIdx];
+      gs.grabbing = true;
+      gs.window = rayWin;
+      gs.point.copy(grabCenter);
+      gs.offset.copy(rayWin.root.position).sub(grabCenter);
+      rayWin.dragging = true;
+      rayWin.focus();
+      return true;
+    }
+
+    // Fallback: grab nearest window within reach (half-diagonal + 15cm)
     let closest = null;
     let closestDist = Infinity;
     for (const win of this.windows) {
@@ -472,7 +488,9 @@ class WindowManager {
       const winPos = new THREE.Vector3();
       win.root.getWorldPosition(winPos);
       const d = grabCenter.distanceTo(winPos);
-      if (d < closestDist) { closestDist = d; closest = win; }
+      const halfDiag = Math.sqrt(win.width * win.width + win.height * win.height) / 2;
+      const maxGrabDist = halfDiag + 0.15;
+      if (d < closestDist && d < maxGrabDist) { closestDist = d; closest = win; }
     }
     if (closest) {
       const gs = this._handGrabState[handIdx];
@@ -663,11 +681,19 @@ class WindowManager {
   update(frame, dt, elapsed, controllers, activeCamera) {
     // Cursor + ray visibility: raycast controllers against windows
     let cursorPlaced = false;
+    // Track which window each controller ray is aimed at (used by onGrabStart)
+    this._rayHoveredWindow = [null, null];
     if (controllers) {
       this.windows.forEach(w => { w.hoverTarget = null; });
 
-      for (const ctrl of controllers) {
+      const session = frame?.session;
+      for (let ctrlIdx = 0; ctrlIdx < controllers.length; ctrlIdx++) {
+        const ctrl = controllers[ctrlIdx];
         if (!ctrl || !ctrl.matrixWorld) continue;
+
+        // Resolve handIdx from actual input source handedness (not array position)
+        const src = session?.inputSources[ctrlIdx];
+        const handIdx = src?.handedness === 'right' ? 1 : src?.handedness === 'left' ? 0 : ctrlIdx;
 
         this._tempMatrix.identity().extractRotation(ctrl.matrixWorld);
         this._raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
@@ -678,38 +704,42 @@ class WindowManager {
           this._detectHover(win);
         }
 
-        // Raycast against all window meshes for cursor placement
-        if (!cursorPlaced) {
-          const allMeshes = [];
+        // Raycast against all window meshes for cursor placement + grab targeting
+        const allMeshes = [];
+        for (const win of this.windows) {
+          if (win.closed || !win.visible) continue;
+          allMeshes.push(...win.getInteractableMeshes());
+        }
+        const hits = this._raycaster.intersectObjects(allMeshes, false);
+        if (hits.length > 0) {
+          // Store which window this controller ray is hitting, keyed by handedness
+          const hitObj = hits[0].object;
           for (const win of this.windows) {
             if (win.closed || !win.visible) continue;
-            allMeshes.push(...win.getInteractableMeshes());
+            if (win.getInteractableMeshes().includes(hitObj)) {
+              this._rayHoveredWindow[handIdx] = win;
+              break;
+            }
           }
-          const hits = this._raycaster.intersectObjects(allMeshes, false);
-          if (hits.length > 0) {
+
+          if (!cursorPlaced) {
             cursorPlaced = true;
             this._cursor.visible = true;
             this._cursor.position.copy(hits[0].point);
-            // Find which window was hit and match its orientation
-            const hitObj = hits[0].object;
-            for (const win of this.windows) {
-              if (win.closed || !win.visible) continue;
-              if (win.getInteractableMeshes().includes(hitObj)) {
-                this._cursor.quaternion.copy(win.root.quaternion);
-                break;
-              }
+            if (this._rayHoveredWindow[handIdx]) {
+              this._cursor.quaternion.copy(this._rayHoveredWindow[handIdx].root.quaternion);
             }
             // Offset forward slightly to prevent z-fighting
             const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this._cursor.quaternion);
             this._cursor.position.addScaledVector(fwd, 0.002);
-            // Hide the ray line on this controller
-            const ray = ctrl.children.find(c => c.isLine);
-            if (ray) ray.visible = false;
-          } else {
-            // No hit — show ray
-            const ray = ctrl.children.find(c => c.isLine);
-            if (ray) ray.visible = true;
           }
+          // Hide the ray line on this controller
+          const ray = ctrl.children.find(c => c.isLine);
+          if (ray) ray.visible = false;
+        } else {
+          // No hit — show ray
+          const ray = ctrl.children.find(c => c.isLine);
+          if (ray) ray.visible = true;
         }
       }
     }
@@ -841,6 +871,7 @@ class WindowManager {
       // Check if finger is touching a window's content surface
       let touchedWin = null;
       let bestDist = Infinity;
+      let bestLocalPoint = null;
 
       for (const win of this.windows) {
         if (win.closed || !win.visible) continue;
@@ -861,6 +892,7 @@ class WindowManager {
         if (inBounds && planeDist < bestDist) {
           bestDist = planeDist;
           touchedWin = win;
+          bestLocalPoint = localPt;
         }
       }
 

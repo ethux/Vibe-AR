@@ -16,6 +16,7 @@ let liveTranscript = '';
 let pendingText = '';
 let controlSent = false;
 let prevTermText = '';
+let termUpdateTimer = null;
 
 // Batch fallback state
 let fallbackRecorder = null;
@@ -51,12 +52,32 @@ function buildMessage(text) {
 }
 
 // ── Live-type text into the terminal (without submitting) ──
+// Since accumulated text only grows (append-only), just send new chars.
+// Falls back to backspace+retype if the text diverges.
 function typeInTerminal(text) {
+  if (text === prevTermText) return;
   const termWs = getTermWs();
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
-  const clear = prevTermText.length > 0 ? '\x15' : '';
-  termWs.send(new TextEncoder().encode('0' + clear + text));
+
+  if (prevTermText.length === 0) {
+    // First chunk — just type it
+    termWs.send(new TextEncoder().encode('0' + text));
+  } else if (text.startsWith(prevTermText)) {
+    // Accumulated grew — only send the new characters
+    const newPart = text.substring(prevTermText.length);
+    if (newPart) termWs.send(new TextEncoder().encode('0' + newPart));
+  } else {
+    // Text changed structure — backspace old, type new
+    const del = '\x7f'.repeat(prevTermText.length);
+    termWs.send(new TextEncoder().encode('0' + del + text));
+  }
   prevTermText = text;
+}
+
+// Debounced version — batches rapid deltas into ~50ms updates
+function scheduleTerminalUpdate(text) {
+  clearTimeout(termUpdateTimer);
+  termUpdateTimer = setTimeout(() => typeInTerminal(text), 50);
 }
 
 // ── Send final text to terminal (with Enter) ──
@@ -71,9 +92,11 @@ function sendToTerminal(text) {
   if (cmdInput) { cmdInput.value = trimmed; cmdInput.placeholder = 'Type command...'; }
   const termWs = getTermWs();
   if (termWs?.readyState === WebSocket.OPEN) {
-    const clear = prevTermText.length > 0 ? '\x15' : '';
+    // Cancel any pending debounced update
+    clearTimeout(termUpdateTimer);
+    const clear = prevTermText.length > 0 ? '\x7f'.repeat(prevTermText.length) : '';
     const msg = buildMessage(trimmed);
-    termWs.send(new TextEncoder().encode('0' + clear + '<speak>' + msg + '</speak>\r'));
+    termWs.send(new TextEncoder().encode('0' + clear + msg + '\r'));
     prevTermText = '';
     log(`[STT] Sent: "${trimmed}"`);
     if (cmdInput) cmdInput.value = '';
@@ -178,9 +201,9 @@ export async function startRecording() {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'delta') {
-        liveTranscript = msg.accumulated ?? (liveTranscript + msg.text);
+        liveTranscript = msg.accumulated || (liveTranscript + (msg.text || ''));
         if (cmdInput) cmdInput.placeholder = liveTranscript.substring(0, 60) + (liveTranscript.length > 60 ? '…' : '');
-        typeInTerminal(liveTranscript);
+        scheduleTerminalUpdate(liveTranscript);
       } else if (msg.type === 'done') {
         pendingText = msg.text || liveTranscript;
         log(`[STT-RT] Done: "${pendingText}"`);

@@ -3,6 +3,7 @@ services:
     build: .
     environment:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - VLLM_API_KEY=${VLLM_API_KEY}
       - GH_TOKEN=${GH_TOKEN}
       - GITHUB_TOKEN=${GH_TOKEN}
       - VIBE_HOME=/root/.vibe
@@ -29,6 +30,8 @@ services:
       - ./workspace:/app/workspace:ro
     environment:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - VLLM_API_KEY=${VLLM_API_KEY}
+      - MISTRAL_API_URL=${MISTRAL_API_URL:-https://api.mistral.ai}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - TTYD_URL=http://vibe-terminal:7681
       - COMPANION_URL=http://companion:8000
