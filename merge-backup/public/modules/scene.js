@@ -3,6 +3,7 @@ import {
   getRenderer, setRenderer, getTermWs, WIN_W, WIN_H,
   getProjectState, setProjectState, getActiveSplash,
   setScene as _setScene, setCamera as _setCamera,
+  setBubbleMgr as _setBubbleMgr,
 } from './core/state.js';
 import { log } from './core/logging.js';
 import { renderTermToCanvas, termRenderCanvas } from './terminal.js';
@@ -13,7 +14,7 @@ import { makeTextTexture } from './core/textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './visualizations/AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './input/hand-tracking.js';
+import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist, detectGrab } from './input/hand-tracking.js';
 import { CodeCityRenderer } from './visualizations/CodeCity.js';
 import { FileBubbleManager } from './visualizations/bubbles.js';
 import { GitTreeRenderer } from './visualizations/git-tree.js';
@@ -96,6 +97,7 @@ export function initScene() {
   codeCity = new CodeCityRenderer(scene, camera, wm);
   bubbleMgr = new FileBubbleManager(scene, wm, codeCity);
   bubbleMgr.loadFiles('.');  // load root workspace files
+  _setBubbleMgr(bubbleMgr);  // expose to voice.js for palm context
 
   // ── Git Tree (3D commit history) ──
   gitTree = new GitTreeRenderer(scene, camera, wm);
@@ -565,12 +567,18 @@ export function initScene() {
             }
           }
 
-          // ── Fist detection → CodeCity grab + right hand rotates bubbles ──
-          const fistResult = detectFist(src, frame, ref);
-          if (fistResult.fisting && !prevGrabState[handIdx]) {
+          // ── Grab (closed fist) → drag windows + CodeCity + right hand rotates bubbles ──
+          const grabResult = detectGrab(src, frame, ref);
+          if (grabResult.grabbing && !prevGrabState[handIdx]) {
             prevGrabState[handIdx] = true;
-            if (fistResult.wristPos) codeCity.onGrabStart(handIdx, fistResult.wristPos);
-            if (src.handedness === 'right') { _fistRotating = true; _fistLastX = fistResult.wristPos?.x ?? 0; }
+            if (grabResult.grabCenter) {
+              // Try window grab first, fall through to CodeCity
+              const grabbedWindow = wm.onGrabStart(handIdx, grabResult.grabCenter);
+              if (!grabbedWindow) {
+                codeCity.onGrabStart(handIdx, grabResult.grabCenter);
+              }
+            }
+            if (src.handedness === 'right') { _fistRotating = true; _fistLastX = grabResult.grabCenter?.x ?? 0; }
             // Right fist double-close → navigate back
             if (src.handedness === 'right') {
               const now2 = performance.now();
@@ -588,17 +596,21 @@ export function initScene() {
                 }
               }
             }
-          } else if (fistResult.fisting && prevGrabState[handIdx]) {
-            if (fistResult.wristPos) codeCity.onGrabMove(handIdx, fistResult.wristPos);
-            if (src.handedness === 'right' && _fistRotating && fistResult.wristPos) {
-              const dx = fistResult.wristPos.x - _fistLastX;
-              _fistLastX = fistResult.wristPos.x;
+          } else if (grabResult.grabbing && prevGrabState[handIdx]) {
+            if (grabResult.grabCenter) {
+              wm.onGrabMove(handIdx, grabResult.grabCenter);
+              codeCity.onGrabMove(handIdx, grabResult.grabCenter);
+            }
+            if (src.handedness === 'right' && _fistRotating && grabResult.grabCenter) {
+              const dx = grabResult.grabCenter.x - _fistLastX;
+              _fistLastX = grabResult.grabCenter.x;
               // Accelerate smoothly toward target velocity (clamp to max)
               const target = Math.max(-ROT_MAX, Math.min(ROT_MAX, dx));
               _rotVelocity += (target - _rotVelocity) * ROT_ACCEL;
             }
-          } else if (!fistResult.fisting && prevGrabState[handIdx]) {
+          } else if (!grabResult.grabbing && prevGrabState[handIdx]) {
             prevGrabState[handIdx] = false;
+            wm.onGrabEnd(handIdx);
             codeCity.onGrabEnd(handIdx);
             if (src.handedness === 'right') _fistRotating = false;
             if (src.handedness === 'right') _leftFistWas = false;

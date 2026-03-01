@@ -120,3 +120,46 @@ def scene_run_terminal_command(command: str) -> str:
     return json.dumps(send_scene_command("terminal_command", {
         "command": command,
     }))
+
+
+@mcp.tool()
+def scene_show_current_terminal(
+    title: str = "Terminal Output",
+    position_x: float = 0.5,
+    position_y: float = 1.3,
+) -> str:
+    """Show the current terminal window in AR so the user can see live output.
+    Use this when you run a command and the user needs to see its output."""
+    return json.dumps(send_scene_command("show_terminal", {
+        "title": title,
+        "position": [position_x, position_y, -0.6],
+    }))
+
+
+# ── Window management ──
+
+@mcp.tool()
+def scene_list_windows() -> str:
+    """List all currently open windows in the AR scene.
+    Returns window titles, IDs, and whether they were opened by the agent."""
+    return json.dumps(send_scene_command("list_windows"))
+
+
+@mcp.tool()
+def scene_hide_window(window_id: int) -> str:
+    """Hide (close) a window in the AR scene.
+    Only auto-hides windows that were opened by the agent.
+    If the window was opened by the user, it will NOT be hidden —
+    a UI prompt will be shown to the user instead."""
+    return json.dumps(send_scene_command("hide_window", {
+        "windowId": window_id,
+    }))
+
+
+# ── Preview controls ──
+
+@mcp.tool()
+def scene_refresh_preview() -> str:
+    """Refresh the live web preview window.
+    Reloads the page being captured so the user sees the latest changes."""
+    return json.dumps(send_scene_command("refresh_preview"))

@@ -7,6 +7,7 @@ let term = null;
 let termWs = null;
 let scene = null;
 let camera = null;
+let bubbleMgr = null;
 
 export function getXrSession() { return xrSession; }
 export function setXrSession(v) { xrSession = v; }
@@ -22,6 +23,8 @@ export function getScene() { return scene; }
 export function setScene(v) { scene = v; }
 export function getCamera() { return camera; }
 export function setCamera(v) { camera = v; }
+export function getBubbleMgr() { return bubbleMgr; }
+export function setBubbleMgr(v) { bubbleMgr = v; }
 
 // ─── Startup splash instance (driven by render loop in scene.js) ───
 let activeSplash = null;

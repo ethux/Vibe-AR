@@ -1,5 +1,5 @@
 // ─── Voice (Mic button + batch transcription) ───
-import { getTermWs, getTerm } from '../core/state.js';
+import { getTermWs, getTerm, getBubbleMgr } from '../core/state.js';
 import { log } from '../core/logging.js';
 import { makeTextTexture } from '../core/textures.js';
 import { speakReply } from '../tts.js';
@@ -34,7 +34,17 @@ async function transcribeAndSend(blob, mime) {
       if (cmdInput) { cmdInput.value = text.trim(); cmdInput.placeholder = 'Type command...'; }
       const termWs = getTermWs();
       if (termWs?.readyState === WebSocket.OPEN) {
-        termWs.send(new TextEncoder().encode('0' + text.trim() + '\r'));
+        // Build message with palm context (hand-held bubbles)
+        let msg = text.trim();
+        const mgr = getBubbleMgr();
+        if (mgr) {
+          const paths = mgr.getPalmContextPaths();
+          if (paths.length) {
+            msg += `\nUSER GAVE YOU CONTEXT: [${paths.join(' – ')}]`;
+            log(`[STT] Palm context: ${paths.join(', ')}`);
+          }
+        }
+        termWs.send(new TextEncoder().encode('0' + msg + '\r'));
         log(`[STT] Sent: "${text.trim()}"`);
         if (cmdInput) cmdInput.value = '';
         speakReply();
