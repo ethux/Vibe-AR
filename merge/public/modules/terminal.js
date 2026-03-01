@@ -64,27 +64,42 @@ export async function initTerminal() {
 
   const textDecoder = new TextDecoder();
   let msgCount = 0;
+  // Debug counters (exposed on window for inspection)
+  window._termStats = { string: 0, bin0: 0, bin1: 0, bin2: 0, binOther: 0, listenerCalls: 0, lastOutput: '' };
   termWs.onmessage = (evt) => {
     msgCount++;
     const data = evt.data;
     if (typeof data === 'string') {
+      window._termStats.string++;
       if (msgCount <= 3) log(`[TERM] str msg: ${data.substring(0, 60)}`);
       term.write(data);
+      // Also dispatch string messages to output listeners
+      onTermOutput(data);
+      for (const fn of _termOutputListeners) { window._termStats.listenerCalls++; fn(data); }
     } else {
       const arr = new Uint8Array(data);
       const cmd = String.fromCharCode(arr[0]);
       const payload = arr.slice(1);
       if (msgCount <= 3) log(`[TERM] bin cmd='${cmd}' len=${payload.length}`);
       switch (cmd) {
-        case '0': // OUTPUT
+        case '0': { // OUTPUT
+          window._termStats.bin0++;
           term.write(payload);
-          { const txt = textDecoder.decode(payload); onTermOutput(txt); for (const fn of _termOutputListeners) fn(txt); }
+          const txt = textDecoder.decode(payload);
+          window._termStats.lastOutput = txt.slice(-200);
+          onTermOutput(txt);
+          for (const fn of _termOutputListeners) { window._termStats.listenerCalls++; fn(txt); }
           break;
+        }
         case '1': // SET_WINDOW_TITLE
+          window._termStats.bin1++;
           document.title = textDecoder.decode(payload);
           break;
         case '2': // SET_PREFERENCES
+          window._termStats.bin2++;
           break;
+        default:
+          window._termStats.binOther++;
       }
     }
   };

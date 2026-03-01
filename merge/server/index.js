@@ -15,6 +15,8 @@ import companionProxyRoutes, { companionProxy } from './routes/companion-proxy.j
 import codecityProxyRoutes from './routes/codecity-proxy.js';
 import sceneControlRoutes, { setupSceneControlWs } from './routes/scene-control.js';
 import gitRoutes from './routes/git.js';
+import devserverProxyRoutes from './routes/devserver-proxy.js';
+import previewStreamRoutes, { setupPreviewStreamWs } from './routes/preview-stream.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -46,6 +48,8 @@ app.use(companionProxyRoutes);
 app.use(codecityProxyRoutes);
 app.use(sceneControlRoutes);
 app.use(gitRoutes);
+app.use(devserverProxyRoutes);
+app.use(previewStreamRoutes);
 
 // Catch-all error logging
 app.use((err, req, res, next) => {
@@ -62,11 +66,14 @@ const sslOptions = {
 const server = createServer(sslOptions, app);
 const proxy = setupTerminalProxy(app, server, TTYD_URL);
 const sceneControl = setupSceneControlWs(server);
+const previewStream = setupPreviewStreamWs(server);
 
-// WebSocket upgrade: scene-control + companion file watcher + terminal
+// WebSocket upgrade: scene-control + preview-stream + companion file watcher + terminal
 server.on('upgrade', (req, socket, head) => {
   if (req.url === '/ws/scene-control') {
     sceneControl.upgrade(req, socket, head);
+  } else if (req.url === '/ws/preview-stream') {
+    previewStream.upgrade(req, socket, head);
   } else if (req.url.startsWith('/api/companion/ws/')) {
     req.url = req.url.replace('/api/companion', '/api');
     companionProxy.ws(req, socket, head);
@@ -84,6 +91,8 @@ const httpServer = createHttpServer(app);
 httpServer.on('upgrade', (req, socket, head) => {
   if (req.url === '/ws/scene-control') {
     sceneControl.upgrade(req, socket, head);
+  } else if (req.url === '/ws/preview-stream') {
+    previewStream.upgrade(req, socket, head);
   } else if (req.url.startsWith('/api/companion/ws/')) {
     req.url = req.url.replace('/api/companion', '/api');
     companionProxy.ws(req, socket, head);
@@ -94,4 +103,13 @@ httpServer.on('upgrade', (req, socket, head) => {
 });
 httpServer.listen(3001, () => {
   console.log(`HTTP server running on port 3001 (for ngrok)`);
+});
+
+// Prevent unhandled errors from crashing the server
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH GUARD] Uncaught exception:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH GUARD] Unhandled rejection:', reason);
 });

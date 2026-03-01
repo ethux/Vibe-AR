@@ -188,7 +188,11 @@ router.all('/mistral-proxy/*', async (req, res) => {
     }
   } catch (err) {
     console.error(`[PROXY] Error: ${req.method} /${path}:`, err.message);
-    res.status(502).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(502).json({ error: err.message });
+    } else {
+      res.end();
+    }
   }
 });
 
