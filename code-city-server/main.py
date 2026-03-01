@@ -20,9 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MISTRAL_API_KEY = os.environ.get(
-    "MISTRAL_API_KEY", "B090F000-12ED-4DA7-AB41-D5BD34776A15"
-)
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MISTRAL_MODEL = "mistral-large-latest"
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
