@@ -112,6 +112,7 @@ class FileBubbleManager {
     this.palmBubbles = [];       // bubbles orbiting the left palm
     this.leftPalmCenter = null;  // THREE.Vector3, updated by scene.js
     this.leftPalmOpen = false;   // whether left palm is open (show/hide palm bubbles)
+    this._palmOpenness = 0;      // continuous 0→1 animation value
   }
 
   async loadFiles(dirPath) {
@@ -398,24 +399,9 @@ class FileBubbleManager {
     }
 
     if (!this._explorerVisible) {
-      // Explorer hidden — only keep palm bubbles orbiting, skip everything else
-      if (this.palmBubbles.length && this.leftPalmCenter) {
-        const elapsed2 = performance.now() / 1000;
-        for (const b of this.palmBubbles) {
-          const ud = b.userData;
-          const total = Math.max(this.palmBubbles.length, 1);
-          const r     = 0.042 + total * 0.010;
-          const angle = elapsed2 * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
-          const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
-          b.position.lerp(new THREE.Vector3(
-            this.leftPalmCenter.x + Math.cos(angle) * r,
-            this.leftPalmCenter.y + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
-            this.leftPalmCenter.z + Math.sin(angle) * Math.cos(tilt) * r
-          ), 0.15);
-          if (ud.cardSprite) ud.cardSprite.position.copy(b.position);
-          if (ud.labelSprite) ud.labelSprite.position.set(b.position.x, b.position.y - ud.cardW * 0.7, b.position.z);
-          if (ud.glowRing) { ud.glowRing.position.copy(b.position); ud.glowRing.position.z += 0.001; }
-        }
+      // Explorer hidden — only animate palm context bubbles
+      if (this.palmBubbles.length) {
+        this._tickPalmOpenness(dt, elapsed);
       }
       return;
     }
@@ -455,10 +441,14 @@ class FileBubbleManager {
       }
     }
 
-    // Update live bubbles
+    // Palm bubbles: driven entirely by _tickPalmOpenness (open/close animation)
+    this._tickPalmOpenness(dt, elapsed);
+
+    // Update live bubbles (free bubbles only — palm bubbles handled above)
     const now = performance.now();
     for (const b of this.fileBubbles) {
       const ud = b.userData;
+      if (ud.inPalm) continue;  // palm bubbles are fully managed by _tickPalmOpenness
 
       // ── MCP moveFileBubble: smooth position animation ──
       if (ud._moveTarget) {
@@ -488,19 +478,8 @@ class FileBubbleManager {
         }
       }
 
-      // Palm orbit — move inPalm bubbles around leftPalmCenter
-      if (ud.inPalm && this.leftPalmCenter) {
-        const total = Math.max(this.palmBubbles.length, 1);
-        const r     = 0.042 + total * 0.010;
-        const angle = elapsed * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
-        const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
-        b.position.lerp(new THREE.Vector3(
-          this.leftPalmCenter.x + Math.cos(angle) * r,
-          this.leftPalmCenter.y + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
-          this.leftPalmCenter.z + Math.sin(angle) * Math.cos(tilt) * r
-        ), 0.15);
-      } else if (!ud.inPalm && !ud._moveTarget) {
-        // Bobbing (only for free bubbles, skip during MCP move)
+      // Bobbing (free bubbles only, skip during MCP move)
+      if (!ud._moveTarget) {
         b.position.y = ud.basePos.y + Math.sin(elapsed * ud.bobSpeed) * ud.bobAmp;
       }
 
@@ -548,12 +527,7 @@ class FileBubbleManager {
   updatePalm(palmCenter, palmOpen) {
     this.leftPalmCenter = palmCenter;
     this.leftPalmOpen = palmOpen;
-    // Show/hide palm bubbles based on palm state
-    for (const b of this.palmBubbles) {
-      if (b.userData.cardSprite) b.userData.cardSprite.visible = palmOpen;
-      if (b.userData.labelSprite) b.userData.labelSprite.visible = palmOpen;
-      if (b.userData.glowRing) b.userData.glowRing.visible = palmOpen;
-    }
+    // Visibility driven by _palmOpenness animation in update()
   }
 
   // Find the closest free bubble within 12cm (not in palm)
@@ -856,6 +830,52 @@ class FileBubbleManager {
       if (b.userData.labelSprite) b.userData.labelSprite.visible = v;
       if (b.userData.glowRing) b.userData.glowRing.visible = v;
       b.visible = v;
+    }
+  }
+
+  // Drive palm bubble position/scale/opacity from openness (0=closed at center, 1=open at orbit)
+  _tickPalmOpenness(dt, elapsedSec) {
+    const target = (this.leftPalmOpen && this.leftPalmCenter) ? 1 : 0;
+    this._palmOpenness += (target - this._palmOpenness) * Math.min(1, dt * 12);
+    const o = this._palmOpenness;
+
+    for (const b of this.palmBubbles) {
+      const ud = b.userData;
+      const total = Math.max(this.palmBubbles.length, 1);
+      const r     = (0.042 + total * 0.010) * o;  // orbit radius scales with openness
+      const angle = elapsedSec * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
+      const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
+
+      // Position: bloom out from palm center
+      const cx = this.leftPalmCenter ? this.leftPalmCenter.x : b.position.x;
+      const cy = this.leftPalmCenter ? this.leftPalmCenter.y : b.position.y;
+      const cz = this.leftPalmCenter ? this.leftPalmCenter.z : b.position.z;
+      b.position.lerp(new THREE.Vector3(
+        cx + Math.cos(angle) * r,
+        cy + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
+        cz + Math.sin(angle) * Math.cos(tilt) * r
+      ), 0.2);
+
+      // Scale and opacity
+      const scale = o * ud.cardW * 0.32;
+      const safeScale = Math.max(0.0001, scale);
+      if (ud.cardSprite) {
+        ud.cardSprite.visible = o > 0.02;
+        ud.cardSprite.scale.set(safeScale, safeScale, 1);
+        ud.cardSprite.position.copy(b.position);
+      }
+      if (ud.cardMat) ud.cardMat.opacity = o * 0.9;
+      if (ud.labelSprite) {
+        ud.labelSprite.visible = o > 0.15;
+        ud.labelSprite.scale.set(Math.max(0.0001, ud.cardW * 2.2 * o * 0.32), Math.max(0.0001, ud.cardW * 0.42 * o * 0.32), 1);
+        ud.labelSprite.position.set(b.position.x, b.position.y - ud.cardW * 0.7 * o, b.position.z);
+      }
+      if (ud.labelMat) ud.labelMat.opacity = o * 0.8;
+      if (ud.glowRing) {
+        ud.glowRing.visible = o > 0.02;
+        ud.glowRing.position.copy(b.position);
+        ud.glowRing.position.z += 0.001;
+      }
     }
   }
 
