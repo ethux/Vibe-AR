@@ -1,4 +1,5 @@
 workspace/
+!workspace/.vibe/
 node_modules/
 test-results/
 .env
