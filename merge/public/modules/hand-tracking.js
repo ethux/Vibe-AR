@@ -61,7 +61,7 @@ function detectPalmOpen(inputSource, frame, refSpace, handedness, renderer) {
   const camPos = new THREE.Vector3(); xrCam.getWorldPosition(camPos);
   const facingCam = palmNormal.dot(camPos.clone().sub(palmCenter).normalize()) > 0.1;
   const isOpen = extCount >= 3 && spread && (palmNormal.y > 0.25 || facingCam);
-  return { open: isOpen, palmCenter };
+  return { open: isOpen, palmCenter, palmNormal: palmNormal.clone() };
 }
 
 function detectPinch(inputSource, frame, refSpace) {
