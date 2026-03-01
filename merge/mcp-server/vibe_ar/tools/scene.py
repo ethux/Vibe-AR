@@ -1,0 +1,122 @@
+"""
+Vibe AR — Scene control tools.
+
+Manipulate the 3D AR visualization: highlight commits, navigate
+the git tree, open floating windows, send notifications, etc.
+"""
+
+from __future__ import annotations
+
+import json
+
+from vibe_ar import mcp
+from vibe_ar.helpers import send_scene_command
+from vibe_ar.tools.git import git_diff
+
+
+# ── Git tree controls ──
+
+@mcp.tool()
+def scene_load_git_tree() -> str:
+    """Load and display the 3D git tree visualization in AR space."""
+    return json.dumps(send_scene_command("load_git_tree"))
+
+
+@mcp.tool()
+def scene_highlight_commit(commit_hash: str, color: str = "#FF7000") -> str:
+    """Highlight a specific commit in the 3D git tree. Color in hex (e.g. #FF7000 for orange, #EF4444 for red, #28c840 for green)."""
+    return json.dumps(send_scene_command("highlight_commit", {
+        "commit": commit_hash,
+        "color": color,
+    }))
+
+
+@mcp.tool()
+def scene_highlight_branch(branch_name: str, color: str = "#00CED1") -> str:
+    """Highlight all commits on a specific branch in the 3D tree."""
+    return json.dumps(send_scene_command("highlight_branch", {
+        "branch": branch_name,
+        "color": color,
+    }))
+
+
+@mcp.tool()
+def scene_navigate_to_commit(commit_hash: str) -> str:
+    """Pan the 3D git tree view to center on a specific commit."""
+    return json.dumps(send_scene_command("navigate_to_commit", {
+        "commit": commit_hash,
+    }))
+
+
+@mcp.tool()
+def scene_clear_highlights() -> str:
+    """Remove all highlights from the 3D git tree."""
+    return json.dumps(send_scene_command("clear_highlights"))
+
+
+# ── Floating windows ──
+
+@mcp.tool()
+def scene_show_commit_details(commit_hash: str) -> str:
+    """Open a floating window in AR showing detailed info for a commit."""
+    return json.dumps(send_scene_command("show_commit_details", {
+        "commit": commit_hash,
+    }))
+
+
+@mcp.tool()
+def scene_show_diff_window(commit_hash: str) -> str:
+    """Open a floating window in AR showing the diff for a commit."""
+    diff = git_diff(commit_hash, stat_only=False)
+    return json.dumps(send_scene_command("show_window", {
+        "title": f"DIFF: {commit_hash[:8]}",
+        "content": diff[:2000],  # Truncate for display
+        "position": [0.5, 1.5, -0.6],
+    }))
+
+
+@mcp.tool()
+def scene_open_file(file_path: str) -> str:
+    """Open a file in a floating AR window (triggers file bubble open)."""
+    return json.dumps(send_scene_command("open_file", {
+        "path": file_path,
+    }))
+
+
+@mcp.tool()
+def scene_show_window(
+    title: str,
+    content: str,
+    position_x: float = 0.4,
+    position_y: float = 1.4,
+) -> str:
+    """Open a custom floating window in AR with arbitrary content."""
+    return json.dumps(send_scene_command("show_window", {
+        "title": title,
+        "content": content,
+        "position": [position_x, position_y, -0.7],
+    }))
+
+
+# ── Notifications & terminal ──
+
+@mcp.tool()
+def scene_show_notification(
+    message: str,
+    duration: float = 3.0,
+    color: str = "#FF7000",
+) -> str:
+    """Show a brief floating notification in AR space."""
+    return json.dumps(send_scene_command("notification", {
+        "message": message,
+        "duration": duration,
+        "color": color,
+    }))
+
+
+@mcp.tool()
+def scene_run_terminal_command(command: str) -> str:
+    """Execute a command in the AR terminal. The user will see it running live."""
+    return json.dumps(send_scene_command("terminal_command", {
+        "command": command,
+    }))
