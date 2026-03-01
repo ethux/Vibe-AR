@@ -11,10 +11,10 @@ router.post('/api/chat', async (req, res) => {
         'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`,
       },
       body: JSON.stringify({
-        model: req.body.model || 'mistral-small-latest',
+        model: req.body.model || 'mistral-large-latest',
         messages: req.body.messages,
         max_tokens: req.body.max_tokens || 200,
-        temperature: req.body.temperature || 0.7,
+        temperature: req.body.temperature || 0.15,
       }),
     });
     const data = await response.json();

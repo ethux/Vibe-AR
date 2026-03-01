@@ -1,0 +1,9 @@
+workspace/
+node_modules/
+test-results/
+.env
+certs/
+*.old
+.git/
+.DS_Store
+merge-backup/
