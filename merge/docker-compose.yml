@@ -8,6 +8,11 @@ services:
       - VIBE_HOME=/root/.vibe
     volumes:
       - ./workspace:/workspace
+    ports:
+      - "5173:5173"
+      - "3333:3333"
+      - "8080:8080"
+      - "4321:4321"
     restart: unless-stopped
 
   web:

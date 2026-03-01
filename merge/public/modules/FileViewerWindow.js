@@ -1,22 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════
-//  FileViewerWindow.js — Monaco Editor / Image Preview Window
+//  FileViewerWindow.js — Code Editor / Image Preview Window
 // ═══════════════════════════════════════════════════════════════════
 //
 //  USAGE:
+//    import { FileViewerWindow } from './FileViewerWindow.js';
 //    const fileViewer = new FileViewerWindow(wm);
-//
-//    // Open a text file (Monaco editor):
 //    fileViewer.open({ filename: 'main.py', content: 'print("hello")', language: 'python' });
-//
-//    // Open an image:
 //    fileViewer.open({ filename: 'logo.png', content: 'data:image/png;base64,...', isImage: true });
 //
-//    // Get current content from the editor:
-//    const text = fileViewer.getContent();
-//
-//  Depends on: WindowManager.js, ManagedWindow.js, PixelArt.js
-//
 // ═══════════════════════════════════════════════════════════════════
+
+import { log } from './logging.js';
 
 class FileViewerWindow {
   /**
@@ -43,7 +37,7 @@ class FileViewerWindow {
     const filename = opts.filename || 'untitled';
     const content = opts.content || '';
     const isImage = opts.isImage || this._isImageFile(filename);
-    const position = opts.position || [0, 1.5, -0.8];
+    const position = opts.position; // undefined = auto-layout by WindowManager
     const width = opts.width || 0.8;
     const height = opts.height || 0.6;
 
@@ -60,11 +54,11 @@ class FileViewerWindow {
     const img = new Image();
     let imageLoaded = false;
 
-    const win = this.wm.createWindow({
+    const imgOpts = {
       title: filename,
       width,
       height,
-      position,
+      closable: true,
       content: (ctx, w, h) => {
         // Dark background for image preview
         ctx.fillStyle = '#1e1e1e';
@@ -104,7 +98,9 @@ class FileViewerWindow {
           ctx.fillText('Loading image...', 20, 30);
         }
       }
-    });
+    };
+    if (position) imgOpts.position = position;
+    const win = this.wm.createWindow(imgOpts);
 
     img.onload = () => {
       imageLoaded = true;
@@ -255,11 +251,11 @@ class FileViewerWindow {
     const PADDING = 5;
     const STATUS_H = 18;
 
-    const win = this.wm.createWindow({
+    const editorOpts = {
       title: `${filename} — ${lang}`,
       width,
       height,
-      position,
+      closable: true,
       content: (ctx, w, h) => {
         const lines = state.content.split('\n');
         const visibleLines = Math.floor((h - PADDING * 2 - STATUS_H) / LINE_HEIGHT);
@@ -355,7 +351,9 @@ class FileViewerWindow {
         const lineCount = `${lines.length} lines`;
         ctx.fillText(lineCount, w / 2 - ctx.measureText(lineCount).width / 2, h - STATUS_H + 3);
       }
-    });
+    };
+    if (position) editorOpts.position = position;
+    const win = this.wm.createWindow(editorOpts);
 
     // ── Content interaction handler (scroll, cursor) ──
     const SCROLL_SENSITIVITY = 0.01; // meters per line

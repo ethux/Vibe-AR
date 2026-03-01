@@ -55,7 +55,7 @@ function _dispatch(cmd) {
   if (!action) return;
   log(`[SCENE-CTRL] Action: ${action}`);
 
-  const { gitTree, bubbleMgr, codeCity, wm } = handlers;
+  const { gitTree, bubbleMgr, codeCity, wm, streamScreen, livePreview, fileViewer } = handlers;
 
   switch (action) {
     // ── Git tree commands ──
@@ -90,16 +90,16 @@ function _dispatch(cmd) {
 
     case 'show_window':
       if (wm) {
-        const pos = cmd.position || [0.4, 1.4, -0.7];
-        const win = wm.createWindow({
+        const winOpts = {
           title: cmd.title || 'MCP Window',
           width: 0.5,
           height: 0.4,
-          position: pos,
           canvasWidth: 512,
           canvasHeight: 400,
           closable: true,
-        });
+        };
+        if (cmd.position) winOpts.position = cmd.position;
+        const win = wm.createWindow(winOpts);
         // Draw content text
         const ctx = win.contentCtx;
         ctx.fillStyle = '#0c0c12';
@@ -142,6 +142,39 @@ function _dispatch(cmd) {
 
     case 'move_file_bubble':
       if (bubbleMgr) bubbleMgr.moveFileBubble(cmd.path, cmd.position);
+      break;
+
+    // ── Screen & preview stream commands ──
+    case 'open_screen_stream':
+      if (streamScreen) streamScreen.open({
+        url: cmd.url,
+        position: cmd.position,
+        width: cmd.width,
+        height: cmd.height,
+      });
+      break;
+
+    case 'close_screen_stream':
+      if (streamScreen) streamScreen.close();
+      break;
+
+    case 'open_live_preview':
+      if (livePreview && cmd.port) livePreview.openPreview(cmd.port);
+      break;
+
+    // ── File viewer commands ──
+    case 'open_file_viewer':
+      if (fileViewer) {
+        fileViewer.open({
+          filename: cmd.filename,
+          content: cmd.content,
+          language: cmd.language,
+          isImage: cmd.isImage,
+          position: cmd.position,
+          width: cmd.width,
+          height: cmd.height,
+        });
+      }
       break;
 
     default:
