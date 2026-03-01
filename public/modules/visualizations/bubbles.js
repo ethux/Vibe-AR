@@ -812,19 +812,42 @@ class FileBubbleManager {
     // For deletes, the polling will catch the removal
   }
 
-  arrangeFiles(layout = 'arc', groupBy = 'type') {
+  arrangeFiles(layout = 'arc', groupBy = 'type', sortBy = 'name') {
     const free = this.fileBubbles.filter(b => !b.userData.inPalm);
     if (!free.length) return;
 
+    // Sort bubbles before grouping
+    const sorted = [...free];
+    sorted.sort((a, b) => {
+      const fdA = a.userData.fileData || {};
+      const fdB = b.userData.fileData || {};
+      // Folders always first
+      if (fdA.type === 'folder' && fdB.type !== 'folder') return -1;
+      if (fdA.type !== 'folder' && fdB.type === 'folder') return 1;
+      if (sortBy === 'size') {
+        return (fdB.size || 0) - (fdA.size || 0); // largest first
+      } else if (sortBy === 'extension') {
+        return (_ext(fdA) || '').localeCompare(_ext(fdB) || '') || (fdA.name || '').localeCompare(fdB.name || '');
+      } else { // 'name'
+        return (fdA.name || '').localeCompare(fdB.name || '');
+      }
+    });
+
     // Group bubbles
     const groups = new Map();
-    for (const b of free) {
+    for (const b of sorted) {
       const fd = b.userData.fileData;
       let key;
       if (groupBy === 'extension') {
         key = fd?.ext || (fd?.type === 'folder' ? 'folder' : 'other');
       } else if (groupBy === 'name') {
         key = (fd?.name?.[0] || '?').toUpperCase();
+      } else if (groupBy === 'size') {
+        const size = fd?.size || 0;
+        if (fd?.type === 'folder') key = 'folders';
+        else if (size > 10000) key = 'large';
+        else if (size > 1000) key = 'medium';
+        else key = 'small';
       } else { // 'type'
         if (fd?.type === 'folder') key = 'folders';
         else if (['js','ts','tsx','jsx','py','rb','go','rs','css','html','sh'].includes(fd?.ext)) key = 'code';
@@ -838,7 +861,7 @@ class FileBubbleManager {
 
     const groupKeys = [...groups.keys()].sort();
     let globalIdx = 0;
-    const total = free.length;
+    const total = sorted.length;
 
     for (let g = 0; g < groupKeys.length; g++) {
       const bubbles = groups.get(groupKeys[g]);

@@ -31,30 +31,23 @@ let latestResponse = { text: '', ts: 0 };
 let responseChunks = { chunks: [], done: true, ts: 0 };
 
 // ── WebSocket clients for real-time TTS push ──
-// Only the latest client is active — prevents double TTS on page reload
-let activeTtsClient = null;
 const ttsClients = new Set();
 let responseGen = 0;
 
 function pushToTtsClients(msg) {
-  if (activeTtsClient && activeTtsClient.readyState === 1) {
-    activeTtsClient.send(JSON.stringify(msg));
+  const data = JSON.stringify(msg);
+  for (const ws of ttsClients) {
+    if (ws.readyState === 1) ws.send(data);
   }
 }
 
 export function setupTtsPushWs(server) {
   const wss = new WebSocketServer({ noServer: true });
   wss.on('connection', (ws) => {
-    if (activeTtsClient && activeTtsClient !== ws && activeTtsClient.readyState === 1) {
-      console.log('[TTS-WS] Closing stale client');
-      activeTtsClient.close();
-    }
-    activeTtsClient = ws;
     ttsClients.add(ws);
-    console.log(`[TTS-WS] Client connected (active), ${ttsClients.size} total`);
+    console.log(`[TTS-WS] Client connected (${ttsClients.size} total)`);
     ws.on('close', () => {
       ttsClients.delete(ws);
-      if (activeTtsClient === ws) activeTtsClient = null;
       console.log(`[TTS-WS] Client disconnected (${ttsClients.size} total)`);
     });
   });

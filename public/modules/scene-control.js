@@ -83,6 +83,18 @@ function _dispatch(cmd) {
       if (gitTree) gitTree.clearHighlights();
       break;
 
+    case 'toggle_git_tree':
+      if (gitTree) gitTree.toggle();
+      break;
+
+    case 'show_git_tree':
+      if (gitTree) gitTree.show();
+      break;
+
+    case 'hide_git_tree':
+      if (gitTree) gitTree.hide();
+      break;
+
     // ── File / window commands ──
     case 'open_file':
       if (bubbleMgr) bubbleMgr.openFile(cmd.path);
@@ -165,7 +177,7 @@ function _dispatch(cmd) {
     case 'arrange_files':
       if (bubbleMgr) {
         if (!bubbleMgr._explorerVisible) bubbleMgr.show();
-        bubbleMgr.arrangeFiles(cmd.layout, cmd.groupBy);
+        bubbleMgr.arrangeFiles(cmd.layout, cmd.groupBy, cmd.sortBy);
       }
       break;
 
@@ -188,6 +200,7 @@ function _dispatch(cmd) {
       break;
 
     case 'open_live_preview':
+      console.log(`[SCENE-CTRL] open_live_preview: port=${cmd.port}, hasLivePreview=${!!livePreview}`);
       if (livePreview && cmd.port) livePreview.openPreview(cmd.port);
       break;
 
@@ -246,7 +259,7 @@ function _showNotification(message, duration = 3, color = '#FF7000') {
 
   // Auto-close after duration
   setTimeout(() => {
-    if (!win.closed) wm.closeWindow(win);
+    if (!win.closed) win.close();
   }, (duration || 3) * 1000);
 }
 
@@ -327,7 +340,7 @@ function _handleHideWindow(windowId) {
 
   // Only auto-hide if the window was opened by the agent
   if (win._openedByAgent) {
-    wm.closeWindow ? wm.closeWindow(win) : win.close();
+    win.close();
     log(`[SCENE-CTRL] Closed agent window: ${win.title}`);
   } else {
     // User-opened window — show a notification instead of closing

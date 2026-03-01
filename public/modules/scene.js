@@ -93,8 +93,9 @@ export function initScene() {
   // Linear filtering for terminal text readability
   termWin._contentTex.magFilter = THREE.LinearFilter;
 
-  // ── CodeCity + File Bubbles ──
-  codeCity = new CodeCityRenderer(scene, camera, wm);
+  // ── CodeCity (disabled — WIP) + File Bubbles ──
+  // codeCity = new CodeCityRenderer(scene, camera, wm);
+  codeCity = { onGrabStart(){}, onGrabMove(){}, onGrabEnd(){}, updateMatrix(){}, updateHover(){}, _fingerTips: null };
   bubbleMgr = new FileBubbleManager(scene, wm, codeCity);
   bubbleMgr.loadFiles('.');  // load root workspace files
   _setBubbleMgr(bubbleMgr);  // expose to voice.js for palm context
@@ -668,21 +669,26 @@ export function initScene() {
             const isVoiceActive = handAnimState[handIdx].wasOpen;
             const showLaser = !s.pinching && !isVoiceActive && !_draggedBubble && indexTip;
             if (showLaser && bubbleMgr.isVisible()) {
-              const indexProx = getJointPos(src, 'index-finger-phalanx-proximal', frame, ref);
-              const laserDir = indexProx
-                ? indexTip.clone().sub(indexProx).normalize()
-                : new THREE.Vector3(0, 0, -1);
-              const hit = bubbleMgr.findBubbleByRay(indexTip, laserDir);
-              _laserTargetBubble = (hit && !hit.userData.inPalm) ? hit : null;
-              const endPt = hit ? hit.position.clone() : indexTip.clone().addScaledVector(laserDir, 2.5);
-              // Position the laser beam quad: place at indexTip, orient toward endPt
-              _laserLine.position.copy(indexTip);
-              _laserLine.lookAt(endPt);
-              const beamLen = indexTip.distanceTo(endPt);
-              _laserLine.scale.set(1, 1, beamLen);
-              _laserMat.uniforms.uBrightness.value = hit ? 0.95 : 0.55;
-              if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
-              _laserLine.visible = true;
+              // Try proximal first, then intermediate, then metacarpal for direction
+              const indexProx = getJointPos(src, 'index-finger-phalanx-proximal', frame, ref)
+                || getJointPos(src, 'index-finger-phalanx-intermediate', frame, ref)
+                || getJointPos(src, 'index-finger-metacarpal', frame, ref);
+              if (indexProx) {
+                const laserDir = indexTip.clone().sub(indexProx).normalize();
+                const hit = bubbleMgr.findBubbleByRay(indexTip, laserDir);
+                _laserTargetBubble = (hit && !hit.userData.inPalm) ? hit : null;
+                const endPt = hit ? hit.position.clone() : indexTip.clone().addScaledVector(laserDir, 2.5);
+                _laserLine.position.copy(indexTip);
+                _laserLine.lookAt(endPt);
+                const beamLen = indexTip.distanceTo(endPt);
+                _laserLine.scale.set(1, 1, beamLen);
+                _laserMat.uniforms.uBrightness.value = hit ? 0.95 : 0.55;
+                if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
+                _laserLine.visible = true;
+              } else {
+                // No finger direction available — hide laser to avoid stray beams
+                _laserLine.visible = false;
+              }
             } else {
               _laserLine.visible = false;
               if (s.pinching) _laserTargetBubble = null;
