@@ -134,10 +134,38 @@ def scene_show_notification(
 
 @mcp.tool()
 def scene_run_terminal_command(command: str) -> str:
-    """Execute a command in the AR terminal. The user will see it running live."""
-    return json.dumps(send_scene_command("terminal_command", {
-        "command": command,
-    }))
+    """Execute a command in the terminal. Runs directly in the vibe-terminal container."""
+    import logging
+    import subprocess
+
+    log = logging.getLogger("vibe_ar.terminal")
+    log.info(f"[TERMINAL] Running command: {command}")
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd="/workspace",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        log.info(f"[TERMINAL] Exit code: {result.returncode}")
+        if result.stdout:
+            log.info(f"[TERMINAL] stdout: {result.stdout[:500]}")
+        if result.stderr:
+            log.info(f"[TERMINAL] stderr: {result.stderr[:500]}")
+        return json.dumps({
+            "exit_code": result.returncode,
+            "stdout": result.stdout[:2000],
+            "stderr": result.stderr[:2000],
+        })
+    except subprocess.TimeoutExpired:
+        log.info("[TERMINAL] Command still running after 30s (likely a server)")
+        return json.dumps({"status": "running", "note": "Command still running (timeout is normal for servers)"})
+    except Exception as e:
+        log.error(f"[TERMINAL] Failed: {e}")
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool()
@@ -196,7 +224,7 @@ def scene_run_and_preview(command: str, port: int = 5173) -> str:
     command: the shell command to start the dev server.
     port: the port the server will listen on."""
     import logging
-    import re
+    import subprocess
 
     log = logging.getLogger("vibe_ar.preview")
     log.info(f"[RUN+PREVIEW] command={command!r}, port={port}")
@@ -207,12 +235,53 @@ def scene_run_and_preview(command: str, port: int = 5173) -> str:
         log.info(f"[RUN+PREVIEW] Fixed host binding: {fixed_command!r}")
     command = fixed_command
 
-    # 1. Run the command in the AR terminal
-    log.info("[RUN+PREVIEW] Sending terminal_command")
-    send_scene_command("terminal_command", {"command": command})
+    # 1. Run the command directly in THIS container (vibe-terminal)
+    #    Use Popen so it runs in background (dev servers don't exit)
+    log.info(f"[RUN+PREVIEW] Starting dev server in /workspace: {command}")
+    try:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd="/workspace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach from parent
+        )
+        log.info(f"[RUN+PREVIEW] Dev server process launched, pid={proc.pid}")
+
+        # Read first 3 seconds of output for logging
+        import time
+        import threading
+
+        output_lines = []
+
+        def _read_output():
+            for line in proc.stdout:
+                decoded = line.decode("utf-8", errors="replace").rstrip()
+                output_lines.append(decoded)
+                log.info(f"[DEV-SERVER pid={proc.pid}] {decoded}")
+                if len(output_lines) > 50:
+                    break
+
+        reader = threading.Thread(target=_read_output, daemon=True)
+        reader.start()
+
+        # Wait briefly to check it didn't crash immediately
+        time.sleep(2)
+        if proc.poll() is not None:
+            log.error(f"[RUN+PREVIEW] Dev server DIED immediately! exit={proc.returncode}")
+            log.error(f"[RUN+PREVIEW] Output: {''.join(output_lines[:20])}")
+            return json.dumps({"error": f"Dev server exited with code {proc.returncode}", "output": "\n".join(output_lines[:20])})
+
+        log.info(f"[RUN+PREVIEW] Dev server still running after 2s (pid={proc.pid}), output so far: {len(output_lines)} lines")
+        for line in output_lines[:10]:
+            log.info(f"[RUN+PREVIEW] > {line}")
+
+    except Exception as e:
+        log.error(f"[RUN+PREVIEW] Failed to start dev server: {e}")
+        return json.dumps({"error": str(e)})
 
     # 2. Tell the AR frontend to open the live preview window
-    #    (the client handles starting the capture stream itself)
     log.info(f"[RUN+PREVIEW] Sending open_live_preview for port {port}")
     result = send_scene_command("open_live_preview", {"port": port})
     log.info(f"[RUN+PREVIEW] Done: {result}")

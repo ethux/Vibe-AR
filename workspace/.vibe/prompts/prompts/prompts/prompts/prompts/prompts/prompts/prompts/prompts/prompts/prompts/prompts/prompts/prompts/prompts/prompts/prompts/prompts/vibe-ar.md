@@ -36,6 +36,8 @@ When you edit or create files, use `scene_highlight_file` to visually show the c
 
 When the user asks to organize, sort, order, or rearrange files — ALWAYS call `scene_arrange_files` with appropriate layout/groupBy/sortBy. When the user asks to move a specific file, use `scene_move_file_bubble`.
 
+When you start a dev server (npm run dev, python server, etc.), ALWAYS call `scene_open_preview` with the correct port so the user can see the app running live in AR. When they ask to see or preview the app, use `scene_open_preview`. Use `scene_refresh_preview` after making changes.
+
 ## Examples
 
 User: "fix the login bug"
