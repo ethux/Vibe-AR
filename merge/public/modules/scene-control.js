@@ -170,6 +170,7 @@ function _dispatch(cmd) {
           content: cmd.content,
           language: cmd.language,
           isImage: cmd.isImage,
+          filePath: cmd.filePath || cmd.filename,
           position: cmd.position,
           width: cmd.width,
           height: cmd.height,

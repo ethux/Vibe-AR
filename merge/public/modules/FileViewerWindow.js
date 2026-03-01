@@ -28,6 +28,7 @@ class FileViewerWindow {
    * @param {string} opts.content    — File text content OR data URL for images
    * @param {string} [opts.language] — Monaco language ID (auto-detected from extension if omitted)
    * @param {boolean} [opts.isImage] — Force image mode
+   * @param {string} [opts.filePath] — Full file path for auto-refresh (defaults to filename)
    * @param {number[]} [opts.position] — [x, y, z] in meters
    * @param {number} [opts.width]    — Window width in meters
    * @param {number} [opts.height]   — Window height in meters
@@ -36,6 +37,7 @@ class FileViewerWindow {
   open(opts = {}) {
     const filename = opts.filename || 'untitled';
     const content = opts.content || '';
+    const filePath = opts.filePath || filename;
     const isImage = opts.isImage || this._isImageFile(filename);
     const position = opts.position; // undefined = auto-layout by WindowManager
     const width = opts.width || 0.8;
@@ -44,7 +46,7 @@ class FileViewerWindow {
     if (isImage) {
       return this._openImageWindow(filename, content, position, width, height);
     } else {
-      return this._openEditorWindow(filename, content, opts.language, position, width, height);
+      return this._openEditorWindow(filename, content, opts.language, position, width, height, filePath);
     }
   }
 
@@ -124,8 +126,9 @@ class FileViewerWindow {
 
   // ── Monaco editor window ──────────────────────────────────────
 
-  _openEditorWindow(filename, content, language, position, width, height) {
+  _openEditorWindow(filename, content, language, position, width, height, filePath) {
     const lang = language || this._detectLanguage(filename);
+    const refreshPath = filePath || filename;
 
     const state = {
       content: content,
@@ -456,18 +459,33 @@ class FileViewerWindow {
     const handle = {
       window: win,
       state: state,
+      filename: filename,
+      _refreshTimer: null,
 
       /** Get the current editor content */
       getContent() {
         return state.content;
       },
 
-      /** Set new content and re-render */
-      setContent(newContent) {
+      /** Set new content and re-render (preserves scroll & cursor) */
+      setContent(newContent, preservePosition = false) {
+        const prevScroll = state.scrollLine;
+        const prevCursorLine = state.cursorLine;
+        const prevCursorCol = state.cursorCol;
+
         state.content = newContent;
-        state.scrollLine = 0;
-        state.cursorLine = 0;
-        state.cursorCol = 0;
+
+        if (preservePosition) {
+          // Clamp to new line count
+          const lineCount = newContent.split('\n').length;
+          state.scrollLine = Math.min(prevScroll, Math.max(0, lineCount - 1));
+          state.cursorLine = Math.min(prevCursorLine, lineCount - 1);
+          state.cursorCol = prevCursorCol;
+        } else {
+          state.scrollLine = 0;
+          state.cursorLine = 0;
+          state.cursorCol = 0;
+        }
         win.setContent(win.contentDrawFn);
       },
 
@@ -497,6 +515,43 @@ class FileViewerWindow {
         state.cursorLine = startLine;
         handle.scrollTo(Math.max(0, startLine - 3));
       },
+
+      /** Stop the auto-refresh polling */
+      stopAutoRefresh() {
+        if (this._refreshTimer) {
+          clearInterval(this._refreshTimer);
+          this._refreshTimer = null;
+        }
+      },
+    };
+
+    // ── Auto-refresh: poll file content every 2 seconds ──
+    const REFRESH_INTERVAL_MS = 2000;
+    handle._refreshTimer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/companion/files/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: refreshPath }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const newContent = data.content ?? '';
+        // Only update if content actually changed
+        if (newContent !== state.content) {
+          handle.setContent(newContent, true);  // preserve scroll & cursor
+          log(`[FileViewer] Auto-refreshed: ${refreshPath}`);
+        }
+      } catch (e) {
+        // Silently ignore fetch errors (server down, etc.)
+      }
+    }, REFRESH_INTERVAL_MS);
+
+    // Clean up interval when window is closed
+    const origClose = win.close.bind(win);
+    win.close = () => {
+      handle.stopAutoRefresh();
+      origClose();
     };
 
     this._windows.push(handle);
