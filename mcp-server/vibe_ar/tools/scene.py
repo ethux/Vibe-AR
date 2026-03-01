@@ -182,6 +182,11 @@ def scene_run_and_preview(command: str, port: int = 5173) -> str:
     Use this whenever you need to start a dev server and show it to the user.
     This is the preferred tool for "run my app" / "start the server" / "show me the app".
 
+    IMPORTANT: The dev server runs in a Docker container.
+    For the preview to work, the server MUST bind to 0.0.0.0 (not localhost).
+    This tool auto-fixes common commands, but if you write the command yourself,
+    always include --host 0.0.0.0 for Vite, -H 0.0.0.0 for Next.js, etc.
+
     Examples:
       scene_run_and_preview("npm run dev", 5173)
       scene_run_and_preview("python -m http.server 8080", 8080)
@@ -191,9 +196,16 @@ def scene_run_and_preview(command: str, port: int = 5173) -> str:
     command: the shell command to start the dev server.
     port: the port the server will listen on."""
     import logging
+    import re
 
     log = logging.getLogger("vibe_ar.preview")
     log.info(f"[RUN+PREVIEW] command={command!r}, port={port}")
+
+    # Auto-fix: dev servers must bind to 0.0.0.0 to be accessible across containers
+    fixed_command = _fix_host_binding(command)
+    if fixed_command != command:
+        log.info(f"[RUN+PREVIEW] Fixed host binding: {fixed_command!r}")
+    command = fixed_command
 
     # 1. Run the command in the AR terminal
     log.info("[RUN+PREVIEW] Sending terminal_command")
@@ -205,6 +217,41 @@ def scene_run_and_preview(command: str, port: int = 5173) -> str:
     result = send_scene_command("open_live_preview", {"port": port})
     log.info(f"[RUN+PREVIEW] Done: {result}")
     return json.dumps(result)
+
+
+def _fix_host_binding(command: str) -> str:
+    """Ensure dev server commands bind to 0.0.0.0 so they're accessible across Docker containers."""
+    # Already has --host flag? Don't modify.
+    if "--host" in command or "-H 0" in command or "HOST=" in command:
+        return command
+
+    # Vite: npm run dev, npx vite, yarn dev, pnpm dev
+    # Add -- --host 0.0.0.0 after the dev command
+    if "npm run dev" in command:
+        return command.replace("npm run dev", "npm run dev -- --host 0.0.0.0")
+    if "yarn dev" in command:
+        return command.replace("yarn dev", "yarn dev --host 0.0.0.0")
+    if "pnpm dev" in command:
+        return command.replace("pnpm dev", "pnpm dev --host 0.0.0.0")
+    if "npx vite" in command:
+        return command.replace("npx vite", "npx vite --host 0.0.0.0")
+
+    # Next.js: npm run dev (already handled), next dev
+    if "next dev" in command:
+        return command.replace("next dev", "next dev -H 0.0.0.0")
+
+    # Create React App / react-scripts
+    if "react-scripts start" in command:
+        return f"HOST=0.0.0.0 {command}"
+    if "npm start" in command and "react" in command.lower():
+        return f"HOST=0.0.0.0 {command}"
+
+    # Python http.server: already binds to 0.0.0.0 by default
+    # Angular CLI: ng serve — add --host
+    if "ng serve" in command:
+        return command.replace("ng serve", "ng serve --host 0.0.0.0")
+
+    return command
 
 
 @mcp.tool()

@@ -4,6 +4,7 @@
 // No Python required — runs entirely in Node.js.
 import { Router } from 'express';
 import { WebSocketServer } from 'ws';
+import http from 'node:http';
 
 let browser = null;
 let page = null;
@@ -19,6 +20,23 @@ const HEIGHT = 960;
 const QUALITY = 70;
 
 const router = Router();
+
+// Placeholder HTML shown while dev server is booting
+const PLACEHOLDER_HTML = (url) => `<!DOCTYPE html>
+<html><head><style>
+  body { margin:0; background:#0c0c12; display:flex; align-items:center; justify-content:center; height:100vh; font-family:monospace; color:#e0e0e0; }
+  .box { text-align:center; }
+  .spinner { width:48px; height:48px; border:4px solid #333; border-top-color:#FF6B00; border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 24px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  h2 { color:#FF6B00; margin:0 0 8px; font-size:22px; }
+  p { color:#888; margin:0; font-size:14px; }
+</style></head><body>
+  <div class="box">
+    <div class="spinner"></div>
+    <h2>Starting dev server...</h2>
+    <p>Waiting for ${url}</p>
+  </div>
+</body></html>`;
 
 // Lazy-load puppeteer to avoid crashes if not installed
 async function getPuppeteer() {
@@ -99,6 +117,12 @@ router.post('/api/devserver/start-stream', async (req, res) => {
       navOk = false;
     }
 
+    // If dev server isn't ready, show a placeholder page
+    if (!navOk) {
+      await page.setContent(PLACEHOLDER_HTML(targetUrl));
+      console.log(`[PREVIEW-STREAM] Showing placeholder for ${targetUrl}`);
+    }
+
     // Start capture loop
     const interval = 1000 / FPS;
     let frameCount = 0;
@@ -109,18 +133,44 @@ router.post('/api/devserver/start-stream', async (req, res) => {
       // If we haven't loaded the real page yet, retry navigation periodically
       if (!navOk && Date.now() - lastRetryTime > NAV_RETRY_INTERVAL) {
         lastRetryTime = Date.now();
+
+        // HTTP probe first — is the port even listening?
+        const probeResult = await new Promise((resolve) => {
+          const req = http.get(streamUrl, { timeout: 2000 }, (res) => {
+            res.resume();
+            resolve({ up: true, status: res.statusCode, contentType: res.headers['content-type'] || 'unknown' });
+          });
+          req.on('error', (e) => resolve({ up: false, error: e.code || e.message }));
+          req.on('timeout', () => { req.destroy(); resolve({ up: false, error: 'TIMEOUT' }); });
+        });
+        console.log(`[PREVIEW-STREAM] HTTP probe ${streamUrl}: ${JSON.stringify(probeResult)}`);
+
+        if (!probeResult.up) {
+          console.log(`[PREVIEW-STREAM] Dev server NOT responding (${probeResult.error}), will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+          try { await page.setContent(PLACEHOLDER_HTML(streamUrl)); } catch {}
+          return; // skip Puppeteer nav — port isn't even open
+        }
+
+        // Port is up — only use Puppeteer nav if content is HTML
+        const isHtml = (probeResult.contentType || '').includes('text/html');
+        if (!isHtml) {
+          console.log(`[PREVIEW-STREAM] Dev server responded but content-type is ${probeResult.contentType}, not HTML — skipping setContent placeholder`);
+        }
+
         try {
-          console.log(`[PREVIEW-STREAM] Retrying navigation to ${streamUrl}...`);
+          console.log(`[PREVIEW-STREAM] Port is up (HTTP ${probeResult.status}), navigating Puppeteer to ${streamUrl}...`);
           await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
           const pageUrl = page.url();
           if (!pageUrl.startsWith('chrome-error://')) {
             navOk = true;
             console.log(`[PREVIEW-STREAM] Navigation succeeded! Page loaded: ${pageUrl}`);
           } else {
-            console.log(`[PREVIEW-STREAM] Still on error page, will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+            console.log(`[PREVIEW-STREAM] Still on error page despite HTTP probe up, will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+            if (isHtml) await page.setContent(PLACEHOLDER_HTML(streamUrl));
           }
         } catch (e) {
           console.log(`[PREVIEW-STREAM] Nav retry failed: ${e.message}, will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+          if (isHtml) { try { await page.setContent(PLACEHOLDER_HTML(streamUrl)); } catch {} }
         }
         return; // skip screenshot this tick
       }
