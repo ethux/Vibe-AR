@@ -128,6 +128,12 @@ class FileBubbleManager {
       { name: 'package.json', type: 'file', ext: 'json' },
     ];
 
+    // Files/folders that add visual noise without useful info
+    const NOISE = new Set([
+      'node_modules', '.git', '.DS_Store', 'dist', 'build',
+      '.next', '.nuxt', '__pycache__', '.venv', 'venv', '.idea',
+    ]);
+
     let entries;
     try {
       const res = await fetch('/api/companion/files/list?path=' + encodeURIComponent(dirPath));
@@ -137,10 +143,8 @@ class FileBubbleManager {
       entries = FALLBACK;
     }
 
-    // Prepend ".." back bubble when not at root
-    if (dirPath !== '.') {
-      entries = [{ name: '..', type: 'folder', _isBack: true }, ...entries];
-    }
+    // Filter out noisy/binary entries; keep useful dotfiles (.env, .gitignore…)
+    entries = entries.filter(e => !NOISE.has(e.name));
 
     entries.forEach((e, i) => {
       const b = this._createBubble(e, i, entries.length);
@@ -217,9 +221,9 @@ class FileBubbleManager {
   // ── Diff application — animate in new, animate out removed ──
 
   _applyDiff(allEntries, added, removed) {
-    // Remove bubbles for deleted files
+    // Remove bubbles for deleted files — never touch palm (context) bubbles
     for (const r of removed) {
-      const idx = this.fileBubbles.findIndex(b => b.userData.fileData?.name === r.name);
+      const idx = this.fileBubbles.findIndex(b => !b.userData.inPalm && b.userData.fileData?.name === r.name);
       if (idx !== -1) {
         const bubble = this.fileBubbles[idx];
         this.fileBubbles.splice(idx, 1);
@@ -243,7 +247,8 @@ class FileBubbleManager {
   _relayout(entries) {
     const total = entries.length;
     for (let i = 0; i < entries.length; i++) {
-      const bubble = this.fileBubbles.find(b => b.userData.fileData?.name === entries[i].name);
+      // Skip palm (context) bubbles — they orbit the palm, not the arc
+      const bubble = this.fileBubbles.find(b => !b.userData.inPalm && b.userData.fileData?.name === entries[i].name);
       if (!bubble) continue;
       const angle = (i / total) * Math.PI * 1.6 - Math.PI * 0.8;
       const radius = 0.7 + (i % 3) * 0.12;
@@ -261,11 +266,24 @@ class FileBubbleManager {
   // ── Bubble lifecycle ──
 
   _removeAllBubbles() {
-    this.fileBubbles.forEach(b => this._destroyBubble(b));
-    this.fileBubbles.length = 0;
-    this.palmBubbles.length = 0;
-    this._spawning.length = 0;
+    // Flush _removing — destroy orphaned sprites immediately to avoid ghost objects
+    for (const r of this._removing) {
+      if (!r.bubble.userData.inPalm) this._destroyBubble(r.bubble);
+    }
     this._removing.length = 0;
+
+    // Keep spawning entries only for palm bubbles (they may still be fading in)
+    this._spawning = this._spawning.filter(s => s.bubble.userData.inPalm);
+
+    // Destroy free bubbles in-place — palm (context) bubbles survive navigation
+    for (let i = this.fileBubbles.length - 1; i >= 0; i--) {
+      const b = this.fileBubbles[i];
+      if (!b.userData.inPalm) {
+        this._destroyBubble(b);
+        this.fileBubbles.splice(i, 1);
+      }
+    }
+    // palmBubbles keeps its references — orbit continues across folders
   }
 
   _destroyBubble(b) {
@@ -391,20 +409,32 @@ class FileBubbleManager {
           ud._moveT = 0;
         }
       }
-      // Smooth move to target position (when relayout happens)
+      // Smooth move to target position (relayout or return from palm)
       else if (ud.targetPos) {
-        b.position.x += (ud.targetPos.x - b.position.x) * Math.min(1, dt * 5);
-        b.position.z += (ud.targetPos.z - b.position.z) * Math.min(1, dt * 5);
-        ud.basePos.x = b.position.x;
-        ud.basePos.z = b.position.z;
-        if (Math.abs(b.position.x - ud.targetPos.x) < 0.001) {
+        const k = Math.min(1, dt * 5);
+        b.position.x += (ud.targetPos.x - b.position.x) * k;
+        b.position.y += (ud.targetPos.y - b.position.y) * k;
+        b.position.z += (ud.targetPos.z - b.position.z) * k;
+        ud.basePos.copy(b.position);
+        if (b.position.distanceTo(ud.targetPos) < 0.002) {
           ud.basePos.copy(ud.targetPos);
           ud.targetPos = null;
         }
       }
 
-      // Bobbing (skip during MCP move)
-      if (!ud._moveTarget) {
+      // Palm orbit — move inPalm bubbles around leftPalmCenter
+      if (ud.inPalm && this.leftPalmCenter) {
+        const total = Math.max(this.palmBubbles.length, 1);
+        const r     = 0.07 + total * 0.018;
+        const angle = elapsed * 1.5 + ((ud.palmOrbitIndex || 0) / total) * Math.PI * 2;
+        const tilt  = (ud.palmOrbitIndex || 0) * 0.6;
+        b.position.lerp(new THREE.Vector3(
+          this.leftPalmCenter.x + Math.cos(angle) * r,
+          this.leftPalmCenter.y + Math.sin(angle) * Math.sin(tilt) * r * 0.5,
+          this.leftPalmCenter.z + Math.sin(angle) * Math.cos(tilt) * r
+        ), 0.15);
+      } else if (!ud.inPalm && !ud._moveTarget) {
+        // Bobbing (only for free bubbles, skip during MCP move)
         b.position.y = ud.basePos.y + Math.sin(elapsed * ud.bobSpeed) * ud.bobAmp;
       }
 
@@ -460,21 +490,103 @@ class FileBubbleManager {
     }
   }
 
-  handlePinch(pinchPoint) {
-    // Iron Man style: pinch directly opens file / navigates folder
+  // Find the closest free bubble within 12cm (not in palm)
+  findClosestFreeBubble(pinchPoint) {
     let closest = null, cd = 0.12;
     for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
       const d = pinchPoint.distanceTo(b.position);
       if (d < cd) { cd = d; closest = b; }
     }
+    return closest;
+  }
+
+  // Raycast from hand direction to find a distant bubble (max 4m)
+  findBubbleByRay(origin, direction) {
+    const ray = new THREE.Raycaster(origin, direction.clone().normalize(), 0, 4);
+    const spheres = this.fileBubbles
+      .filter(b => !b.userData.inPalm && b.userData.sphere)
+      .map(b => b.userData.sphere);
+    if (!spheres.length) return null;
+    const hits = ray.intersectObjects(spheres);
+    if (!hits.length) return null;
+    return this.fileBubbles.find(b => b.userData.sphere === hits[0].object) || null;
+  }
+
+  // Open a specific bubble (public entry point for drag-to-open)
+  openBubble(bubble) {
+    bubble.userData.scaleTarget = 1.3;
+    setTimeout(() => { if (bubble.userData) bubble.userData.scaleTarget = 1; }, 200);
+    this._openBubble(bubble);
+  }
+
+  handlePinch(pinchPoint) {
+    const closest = this.findClosestFreeBubble(pinchPoint);
     if (closest) {
-      // Quick pulse feedback before opening
       closest.userData.scaleTarget = 1.3;
       setTimeout(() => { if (closest.userData) closest.userData.scaleTarget = 1; }, 200);
       this._openBubble(closest, pinchPoint);
       return true;
     }
     return false;
+  }
+
+  // Left hand: pinch free bubble → add to palm context; pinch palm bubble → remove from context
+  handleLeftPinch(pinchPoint) {
+    // Free bubble first (radius 12cm) → add to context
+    let closest = null, cd = 0.12;
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < cd) { cd = d; closest = b; }
+    }
+    if (closest) {
+      closest.userData.inPalm = true;
+      closest.userData.scaleTarget = 0.5;
+      closest.userData.palmOrbitIndex = this.palmBubbles.length;
+      closest.visible = true;
+      this.palmBubbles.push(closest);
+      return true;
+    }
+    // Palm bubble (radius 8cm) → remove from context
+    let pc = null, pd = 0.08, pi = -1;
+    this.palmBubbles.forEach((b, i) => {
+      const d = pinchPoint.distanceTo(b.position);
+      if (d < pd) { pd = d; pc = b; pi = i; }
+    });
+    if (pc) {
+      pc.userData.inPalm = false;
+      pc.userData.scaleTarget = 1;
+      // Animate back to original arc position (smooth fly-back)
+      pc.userData.targetPos = pc.userData.basePos.clone();
+      pc.userData.restPos.copy(pc.userData.basePos);
+      pc.visible = true;
+      if (this.openedBubble === pc) this.openedBubble = null;
+      this.palmBubbles.splice(pi, 1);
+      this.palmBubbles.forEach((b, i) => { b.userData.palmOrbitIndex = i; });
+      return true;
+    }
+    return false;
+  }
+
+  // Right fist horizontal sweep → rotate all free bubbles around Y axis
+  rotateBubbles(dx) {
+    const a = dx * 3.5, cos = Math.cos(a), sin = Math.sin(a);
+    for (const b of this.fileBubbles) {
+      if (b.userData.inPalm) continue;
+      const bp = b.userData.basePos;
+      const nx = bp.x * cos + bp.z * sin, nz = -bp.x * sin + bp.z * cos;
+      bp.x = nx; bp.z = nz;
+      b.userData.restPos.x = nx; b.userData.restPos.z = nz;
+    }
+  }
+
+  // Go back to parent directory
+  navigateBack() {
+    if (this.currentPath === '.') return;
+    const parts = this.currentPath.split('/').filter(p => p && p !== '.');
+    if (parts.length > 1) { parts.pop(); this.loadFiles(parts.join('/')); }
+    else { this.loadFiles('.'); }
   }
 
   handleRaycast(raycaster) {
@@ -510,13 +622,7 @@ class FileBubbleManager {
     if (!fd) return;
 
     if (fd.type === 'folder') {
-      if (fd._isBack || fd.name === '..') {
-        const parts = this.currentPath.split('/');
-        parts.pop();
-        this.loadFiles(parts.length ? parts.join('/') : '.');
-      } else {
-        this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
-      }
+      this.loadFiles(this.currentPath === '.' ? fd.name : this.currentPath + '/' + fd.name);
       return;
     }
 

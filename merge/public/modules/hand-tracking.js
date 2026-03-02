@@ -91,4 +91,28 @@ function detectFist(inputSource, frame, refSpace) {
   return { fisting: curled >= 3, wristPos: wrist };
 }
 
-export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist };
+function detectPointing(inputSource, frame, refSpace) {
+  const wrist      = getJointPos(inputSource, 'wrist', frame, refSpace);
+  const indexTip   = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+  const indexProx  = getJointPos(inputSource, 'index-finger-phalanx-proximal', frame, refSpace);
+  const middleTip  = getJointPos(inputSource, 'middle-finger-tip', frame, refSpace);
+  const middleProx = getJointPos(inputSource, 'middle-finger-phalanx-proximal', frame, refSpace);
+  const ringTip    = getJointPos(inputSource, 'ring-finger-tip', frame, refSpace);
+  const ringProx   = getJointPos(inputSource, 'ring-finger-phalanx-proximal', frame, refSpace);
+  const pinkyTip   = getJointPos(inputSource, 'pinky-finger-tip', frame, refSpace);
+  const pinkyProx  = getJointPos(inputSource, 'pinky-finger-phalanx-proximal', frame, refSpace);
+  const thumbTip   = getJointPos(inputSource, 'thumb-tip', frame, refSpace);
+  if (!wrist || !indexTip || !indexProx || !middleTip || !middleProx || !ringTip || !ringProx || !pinkyTip || !pinkyProx)
+    return false;
+  // Index clearly extended (1.5x to avoid false triggers with half-bent finger)
+  const indexExtended = indexTip.distanceTo(wrist) > indexProx.distanceTo(wrist) * 1.5;
+  // Middle, ring, pinky clearly curled (tip close to proximal distance)
+  const middleCurled = middleTip.distanceTo(wrist) < middleProx.distanceTo(wrist) * 1.2;
+  const ringCurled   = ringTip.distanceTo(wrist)   < ringProx.distanceTo(wrist)   * 1.2;
+  const pinkyCurled  = pinkyTip.distanceTo(wrist)  < pinkyProx.distanceTo(wrist)  * 1.2;
+  // Thumb clearly NOT pinching index (4cm gap vs 2.5cm pinch threshold)
+  const notPinching  = thumbTip ? thumbTip.distanceTo(indexTip) > 0.045 : true;
+  return indexExtended && middleCurled && ringCurled && pinkyCurled && notPinching;
+}
+
+export { HAND_JOINTS, getJointPos, detectPalmOpen, detectPinch, detectFist, detectPointing };
