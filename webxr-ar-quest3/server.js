@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer } from 'https';
+import { createServer as createHttpServer } from 'http';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -20,6 +21,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const TTYD_URL = process.env.TTYD_URL || 'http://localhost:7681';
 
+// No caching — bust Cloudflare + browser cache
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
+  next();
+});
 app.use(express.static(join(__dirname, 'public')));
 app.use(express.json({ limit: '10mb' }));
 
@@ -35,6 +44,19 @@ app.all('/terminal/*', (req, res) => {
 // Expose config to frontend — ttyd is now at /terminal/ on the same origin
 app.get('/api/config', (req, res) => {
   res.json({ ttydUrl: '/terminal/' });
+});
+
+// Remote debug logging (Quest → server console)
+app.post('/api/log', (req, res) => {
+  const ts = new Date().toISOString().substring(11, 19);
+  console.log(`[QUEST ${ts}] ${req.body.msg}`);
+  res.json({ ok: true });
+});
+
+// Catch-all error logging
+app.use((err, req, res, next) => {
+  console.error(`[SERVER ERROR] ${req.method} ${req.url}:`, err.message);
+  res.status(500).json({ error: err.message });
 });
 
 // ─── API Proxies (voice pipeline) ───
@@ -132,6 +154,18 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running at https://192.0.0.2:${PORT}`);
+  console.log(`HTTPS server running on port ${PORT}`);
   console.log(`ttyd proxied from ${TTYD_URL} → /terminal/`);
+});
+
+// HTTP server for ngrok (port 3001)
+const httpServer = createHttpServer(app);
+httpServer.on('upgrade', (req, socket, head) => {
+  if (req.url.startsWith('/terminal')) {
+    req.url = req.url.replace(/^\/terminal/, '');
+    proxy.ws(req, socket, head);
+  }
+});
+httpServer.listen(3001, () => {
+  console.log(`HTTP server running on port 3001 (for ngrok)`);
 });
