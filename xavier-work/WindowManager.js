@@ -554,12 +554,32 @@ class ManagedWindow {
   // ── Resize handles ────────────────────────────────────────────
   _buildResizeHandles(W, H, border, titleH, bottomH) {
     this._resizeHandles = {};
-    const handleSize = 0.03;
+    const handleSize = 0.045; // larger for easier targeting
+    const outset = 0.012;     // how far outside the corner to push
+
+    // Create a small pixel-art L-shaped corner icon on a canvas (WHITE)
+    const makeCornerCanvas = () => {
+      const C = 8;
+      const canvas = document.createElement('canvas');
+      canvas.width = C; canvas.height = C;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      // L-shape: 2px thick lines along two edges
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, C, 2); // top edge
+      ctx.fillRect(0, 0, 2, C); // left edge
+      return canvas;
+    };
 
     const makeHandle = (name, x, y, rotZ) => {
+      const cornerCanvas = makeCornerCanvas();
+      const cornerTex = new THREE.CanvasTexture(cornerCanvas);
+      cornerTex.minFilter = THREE.NearestFilter;
+      cornerTex.magFilter = THREE.NearestFilter;
+
       const geo = new THREE.PlaneGeometry(handleSize, handleSize);
       const mat = new THREE.MeshBasicMaterial({
-        color: 0xF97316, transparent: true, opacity: 0.0, side: THREE.DoubleSide
+        map: cornerTex, transparent: true, opacity: 0.0, side: THREE.DoubleSide
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x, y, 0.002);
@@ -571,12 +591,11 @@ class ManagedWindow {
 
     const halfW = W / 2;
     const halfH = this._contentH / 2;
-    // Corner handles
-    makeHandle('br', halfW, -halfH - 0.015, 0);
-    makeHandle('bl', -halfW, -halfH - 0.015, Math.PI / 2);
-    makeHandle('tr', halfW, halfH + this._titleH, -Math.PI / 2);
-    makeHandle('tl', -halfW, halfH + this._titleH, Math.PI);
-    // Edge mid-point handles (optional — we'll show corners primarily)
+    // Corner handles — pushed outward from each corner
+    makeHandle('br',  halfW + outset, -halfH - 0.015 - outset, -Math.PI / 2);
+    makeHandle('bl', -halfW - outset, -halfH - 0.015 - outset, Math.PI);
+    makeHandle('tr',  halfW + outset,  halfH + this._titleH + outset, 0);
+    makeHandle('tl', -halfW - outset,  halfH + this._titleH + outset, Math.PI / 2);
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -653,13 +672,10 @@ class ManagedWindow {
     const cns = ccs + (closeTargetScale - ccs) * lerpSpeed * dt;
     this.closeBtnMesh.scale.set(cns, cns, 1);
 
-    // Resize handles — show when hovering any border
-    const borderHover = this.hoverTarget && this.hoverTarget.startsWith('border');
-    const cornerHover = this.hoverTarget && this.hoverTarget.startsWith('corner');
+    // Resize handles — show only when hovering that specific corner handle
     for (const [name, handle] of Object.entries(this._resizeHandles)) {
-      const isActive = (cornerHover && this.hoverTarget === name) ||
-                       (borderHover) || (cornerHover);
-      handle.targetOpacity = isActive ? 0.85 : 0.0;
+      const isActive = this.hoverTarget === name;
+      handle.targetOpacity = isActive ? 1.0 : 0.0;
       handle.mat.opacity += (handle.targetOpacity - handle.mat.opacity) * lerpSpeed * dt;
     }
   }
@@ -712,6 +728,7 @@ class WindowManager {
     this._controllerDragWindow = null;
     this._controllerDragCtrl   = null;
     this._controllerDragOffset = new THREE.Vector3();
+    this._controllerDragDist   = 0;
 
     // Hand drag state (per hand index)
     this._handDragState = [
@@ -789,25 +806,17 @@ class WindowManager {
         this._controllerDragWindow = win;
         this._controllerDragCtrl = controller;
         this._controllerDragOffset.copy(win.root.position).sub(dragHits[0].point);
+        this._controllerDragDist = dragHits[0].distance;
         win.dragging = true;
         win.focus();
         return;
       }
 
-      // Check resize handles
+      // Check resize handles (corner handles only)
       for (const [name, handle] of Object.entries(win._resizeHandles)) {
         const resizeHits = this._raycaster.intersectObject(handle.mesh, false);
-        if (resizeHits.length > 0 && handle.mat.opacity > 0.3) {
+        if (resizeHits.length > 0) {
           this._startResize(win, name, resizeHits[0].point, controller, null);
-          return;
-        }
-      }
-
-      // Check border meshes for resize
-      for (const [name, mesh] of Object.entries(win._borderMeshes)) {
-        const borderHits = this._raycaster.intersectObject(mesh, false);
-        if (borderHits.length > 0) {
-          this._startResize(win, name, borderHits[0].point, controller, null);
           return;
         }
       }
@@ -854,11 +863,11 @@ class WindowManager {
         }
       }
 
-      // Check borders for resize
-      for (const [name, mesh] of Object.entries(win._borderMeshes)) {
-        const meshWorld = new THREE.Vector3();
-        mesh.getWorldPosition(meshWorld);
-        if (pinchPoint.distanceTo(meshWorld) < 0.06) {
+      // Check resize handles (corner handles only)
+      for (const [name, handle] of Object.entries(win._resizeHandles)) {
+        const handleWorld = new THREE.Vector3();
+        handle.mesh.getWorldPosition(handleWorld);
+        if (pinchPoint.distanceTo(handleWorld) < 0.06) {
           this._startResize(win, name, pinchPoint, null, handIdx);
           return true;
         }
@@ -883,11 +892,8 @@ class WindowManager {
     const state = this._handDragState[handIdx];
     if (state.dragging && state.window) {
       const target = pinchPoint.clone().add(state.offset);
-      state.window.root.position.lerp(target, 0.4);
-      // Billboard
-      const camPos = new THREE.Vector3();
-      this.camera.getWorldPosition(camPos);
-      state.window.root.lookAt(camPos);
+      state.window.root.position.copy(target);
+      // Don't lookAt during drag — rotation changes matrixWorld and breaks offset
     }
     if (this._resizeState.active && this._resizeState.handIdx === handIdx) {
       this._updateResize(pinchPoint);
@@ -986,17 +992,12 @@ class WindowManager {
       this._raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
       this._raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this._tempMatrix);
 
-      const dist = win.root.position.distanceTo(this._raycaster.ray.origin);
+      // Use the fixed grab distance so the window doesn't drift
       const target = this._raycaster.ray.origin.clone()
-        .add(this._raycaster.ray.direction.clone().multiplyScalar(dist));
+        .add(this._raycaster.ray.direction.clone().multiplyScalar(this._controllerDragDist));
       target.add(this._controllerDragOffset);
 
-      win.root.position.lerp(target, 0.5);
-
-      // Billboard
-      const camPos = new THREE.Vector3();
-      this.camera.getWorldPosition(camPos);
-      win.root.lookAt(camPos);
+      win.root.position.copy(target);
     }
 
     // ── Controller resize update ──
@@ -1027,20 +1028,20 @@ class WindowManager {
     const closeHits = this._raycaster.intersectObject(win.closeBtnMesh, false);
     if (closeHits.length > 0) { win.hoverTarget = 'closeBtn'; return; }
 
-    // Check borders
-    for (const [name, mesh] of Object.entries(win._borderMeshes)) {
-      const hits = this._raycaster.intersectObject(mesh, false);
-      if (hits.length > 0) {
-        win.hoverTarget = 'border_' + name;
-        return;
-      }
-    }
-
-    // Check resize handles
+    // Check resize handles FIRST (corners take priority)
     for (const [name, handle] of Object.entries(win._resizeHandles)) {
       const hits = this._raycaster.intersectObject(handle.mesh, false);
       if (hits.length > 0) {
         win.hoverTarget = name; // 'br','bl','tr','tl'
+        return;
+      }
+    }
+
+    // Check borders (visual hover only — no resize)
+    for (const [name, mesh] of Object.entries(win._borderMeshes)) {
+      const hits = this._raycaster.intersectObject(mesh, false);
+      if (hits.length > 0) {
+        win.hoverTarget = 'border_' + name;
         return;
       }
     }
@@ -1070,7 +1071,20 @@ class WindowManager {
         continue;
       }
 
-      // Borders proximity
+      // Resize handles proximity (check before borders)
+      let foundHandle = false;
+      for (const [name, handle] of Object.entries(win._resizeHandles)) {
+        const handleWorld = new THREE.Vector3();
+        handle.mesh.getWorldPosition(handleWorld);
+        if (fingerTipPos.distanceTo(handleWorld) < 0.06) {
+          win.hoverTarget = name; // 'br','bl','tr','tl'
+          foundHandle = true;
+          break;
+        }
+      }
+      if (foundHandle) continue;
+
+      // Borders proximity (visual hover only — no resize)
       for (const [name, mesh] of Object.entries(win._borderMeshes)) {
         const meshWorld = new THREE.Vector3();
         mesh.getWorldPosition(meshWorld);
