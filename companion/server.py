@@ -269,6 +269,52 @@ async def ws_terminal(ws: WebSocket, session_id: str):
         proc.terminate()
 
 
+# ── WebSocket for file watching ──────────────
+@app.websocket("/ws/files/watch")
+async def ws_file_watch(ws: WebSocket, path: str = "."):
+    """Push file-system changes to the client in real time."""
+    await ws.accept()
+    target = resolve(path)
+    if not target.is_dir():
+        await ws.close(code=1008, reason="not a directory")
+        return
+
+    def snapshot():
+        entries = []
+        try:
+            for entry in sorted(target.iterdir()):
+                entries.append({
+                    "name": entry.name,
+                    "type": "folder" if entry.is_dir() else "file",
+                    "size": entry.stat().st_size if entry.is_file() else None,
+                    "ext": entry.suffix.lstrip(".") if entry.is_file() else None,
+                })
+        except Exception:
+            pass
+        return entries
+
+    prev = snapshot()
+    try:
+        while True:
+            await asyncio.sleep(1)
+            curr = snapshot()
+            if curr != prev:
+                prev_names = {e["name"] for e in prev}
+                curr_names = {e["name"] for e in curr}
+                added = [e for e in curr if e["name"] not in prev_names]
+                removed = [e for e in prev if e["name"] not in curr_names]
+                await ws.send_json({
+                    "event": "change",
+                    "path": path,
+                    "entries": curr,
+                    "added": added,
+                    "removed": removed,
+                })
+                prev = curr
+    except WebSocketDisconnect:
+        pass
+
+
 # ── Health ───────────────────────────────────
 @app.get("/api/health")
 def health():
