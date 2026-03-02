@@ -5,7 +5,24 @@
 import { Router } from 'express';
 
 const router = Router();
-const MISTRAL_API = 'https://api.mistral.ai';
+const DEFAULT_API = process.env.MISTRAL_API_URL || 'https://api.mistral.ai';
+
+// Model → backend routing (auto-detect local vs cloud per request)
+const VLLM_URL = process.env.VLLM_URL || 'https://vllm.aptget.nl';
+const MISTRAL_URL = 'https://api.mistral.ai';
+const LOCAL_MODELS = new Set((process.env.LOCAL_MODELS || 'Devstral-Small').split(','));
+
+function getBackend(model) {
+  if (model && LOCAL_MODELS.has(model)) {
+    return { url: VLLM_URL, key: process.env.VLLM_API_KEY || process.env.MISTRAL_API_KEY };
+  }
+  if (DEFAULT_API !== MISTRAL_URL) {
+    return { url: DEFAULT_API, key: process.env.VLLM_API_KEY || process.env.MISTRAL_API_KEY };
+  }
+  return { url: MISTRAL_URL, key: process.env.MISTRAL_API_KEY };
+}
+
+console.log(`[PROXY] Default backend: ${DEFAULT_API}`);
 
 // In-memory store for the latest assistant response
 let latestResponse = { text: '', ts: 0 };
@@ -75,14 +92,16 @@ function cleanForSpeech(text) {
 // Transparent MITM for ALL methods and paths under /mistral-proxy/
 router.all('/mistral-proxy/*', async (req, res) => {
   const path = req.params[0];
-  const targetUrl = `${MISTRAL_API}/${path}`;
-  const apiKey = process.env.MISTRAL_API_KEY;
+  const model = req.body?.model;
+  const backend = getBackend(model);
+  const targetUrl = `${backend.url}/${path}`;
+  const apiKey = backend.key;
 
   const isPost = req.method === 'POST';
   const isStreaming = isPost && req.body?.stream === true;
   const isChatCompletions = path.endsWith('chat/completions');
 
-  console.log(`[PROXY] ${req.method} /${path}${isStreaming ? ' (stream)' : ''}`);
+  console.log(`[PROXY] ${req.method} /${path}${isStreaming ? ' (stream)' : ''} → ${backend.url}${model ? ` [${model}]` : ''}`);
 
   try {
     const headers = {

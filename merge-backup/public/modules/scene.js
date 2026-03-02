@@ -297,6 +297,14 @@ export function initScene() {
   let _backSwipeActive = false;
   const _backSwipeStart = new THREE.Vector3();
 
+  // Index finger touch-to-open (right hand index tip near bubble → hold 5 frames → open)
+  const INDEX_TOUCH_DIST   = 0.06;  // 6cm proximity
+  const INDEX_PRESS_FRAMES = 5;     // ~80ms hold at 60fps
+  const INDEX_TAP_COOLDOWN = 500;   // ms before next tap allowed
+  let _indexPressBubble      = null;
+  let _indexPressFrames      = 0;
+  let _indexTapCooldownUntil = 0;
+
   // Right palm openness for smooth mascot scale/fade (0=closed, 1=fully open)
   let _rightPalmOpenness = 0;
 
@@ -626,6 +634,34 @@ export function initScene() {
 
           // Hand hover
           wm.updateHandHover(handIdx, indexTip);
+
+          // ── Right index finger touch-to-open (explorer only, not while pinching/dragging/voice) ──
+          if (handedness === 'right' && indexTip && bubbleMgr.isVisible() && !s.pinching && !_draggedBubble && !handAnimState[handIdx].wasOpen) {
+            const now = performance.now();
+            if (now > _indexTapCooldownUntil) {
+              const near = bubbleMgr.findBubbleAtPosition(indexTip, INDEX_TOUCH_DIST);
+              if (near) {
+                if (_indexPressBubble === near) {
+                  _indexPressFrames++;
+                  // Visual feedback: scale up slightly while holding
+                  near.userData.scaleTarget = 1 + 0.15 * (_indexPressFrames / INDEX_PRESS_FRAMES);
+                  if (_indexPressFrames >= INDEX_PRESS_FRAMES) {
+                    bubbleMgr.openBubble(near);
+                    _indexPressBubble = null;
+                    _indexPressFrames = 0;
+                    _indexTapCooldownUntil = now + INDEX_TAP_COOLDOWN;
+                  }
+                } else {
+                  _indexPressBubble = near;
+                  _indexPressFrames = 1;
+                }
+              } else {
+                if (_indexPressBubble) _indexPressBubble.userData.scaleTarget = 1;
+                _indexPressBubble = null;
+                _indexPressFrames = 0;
+              }
+            }
+          }
 
           // ── Right hand laser pointer (only when not pinching, not doing voice, not dragging) ──
           if (handedness === 'right') {

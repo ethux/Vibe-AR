@@ -55,6 +55,21 @@ def scene_show_file_change(
 
 
 @mcp.tool()
+def scene_arrange_files(
+    layout: str = "arc",
+    group_by: str = "type",
+) -> str:
+    """Rearrange file bubbles in the AR view using a spatial layout.
+    layout: 'arc' (default semicircle), 'grid' (flat grid), 'cluster' (grouped clusters).
+    group_by: 'type' (folders/code/config/docs), 'extension' (by file extension), 'name' (alphabetical).
+    Use this when the user wants to organize or reorganize their file view."""
+    return json.dumps(send_scene_command("arrange_files", {
+        "layout": layout,
+        "groupBy": group_by,
+    }))
+
+
+@mcp.tool()
 def scene_move_file_bubble(
     file_path: str,
     x: float = 0.0,

@@ -6,9 +6,23 @@ import { Router } from 'express';
 import { WebSocketServer } from 'ws';
 
 const router = Router();
-const MISTRAL_API = process.env.MISTRAL_API_URL || 'https://api.mistral.ai';
-const isLocalBackend = MISTRAL_API !== 'https://api.mistral.ai';
-console.log(`[PROXY] Backend: ${MISTRAL_API}${isLocalBackend ? ' (local)' : ' (cloud)'}`);
+const DEFAULT_API = process.env.MISTRAL_API_URL || 'https://api.mistral.ai';
+
+// Model → backend routing (auto-detect local vs cloud per request)
+const VLLM_URL = process.env.VLLM_URL || 'https://vllm.aptget.nl';
+const MISTRAL_URL = 'https://api.mistral.ai';
+const LOCAL_MODELS = new Set((process.env.LOCAL_MODELS || 'Devstral-Small').split(','));
+
+function getBackend(model) {
+  // Local models → vLLM server
+  if (model && LOCAL_MODELS.has(model)) {
+    return { url: VLLM_URL, key: process.env.VLLM_API_KEY || process.env.MISTRAL_API_KEY };
+  }
+  // Cloud models → always Mistral API (ignore MISTRAL_API_URL override)
+  return { url: MISTRAL_URL, key: process.env.MISTRAL_API_KEY };
+}
+
+console.log(`[PROXY] Default backend: ${DEFAULT_API}`);
 
 // In-memory store for the latest assistant response
 let latestResponse = { text: '', ts: 0 };
@@ -17,23 +31,30 @@ let latestResponse = { text: '', ts: 0 };
 let responseChunks = { chunks: [], done: true, ts: 0 };
 
 // ── WebSocket clients for real-time TTS push ──
+// Only the latest client is active — prevents double TTS on page reload
+let activeTtsClient = null;
 const ttsClients = new Set();
 let responseGen = 0;
 
 function pushToTtsClients(msg) {
-  const data = JSON.stringify(msg);
-  for (const ws of ttsClients) {
-    if (ws.readyState === 1) ws.send(data);
+  if (activeTtsClient && activeTtsClient.readyState === 1) {
+    activeTtsClient.send(JSON.stringify(msg));
   }
 }
 
 export function setupTtsPushWs(server) {
   const wss = new WebSocketServer({ noServer: true });
   wss.on('connection', (ws) => {
+    if (activeTtsClient && activeTtsClient !== ws && activeTtsClient.readyState === 1) {
+      console.log('[TTS-WS] Closing stale client');
+      activeTtsClient.close();
+    }
+    activeTtsClient = ws;
     ttsClients.add(ws);
-    console.log(`[TTS-WS] Client connected (${ttsClients.size} total)`);
+    console.log(`[TTS-WS] Client connected (active), ${ttsClients.size} total`);
     ws.on('close', () => {
       ttsClients.delete(ws);
+      if (activeTtsClient === ws) activeTtsClient = null;
       console.log(`[TTS-WS] Client disconnected (${ttsClients.size} total)`);
     });
   });
@@ -105,16 +126,16 @@ function cleanForSpeech(text) {
 // Transparent MITM for ALL methods and paths under /mistral-proxy/
 router.all('/mistral-proxy/*', async (req, res) => {
   const path = req.params[0];
-  const targetUrl = `${MISTRAL_API}/${path}`;
-  const apiKey = isLocalBackend
-    ? (process.env.VLLM_API_KEY || process.env.MISTRAL_API_KEY)
-    : process.env.MISTRAL_API_KEY;
+  const model = req.body?.model;
+  const backend = getBackend(model);
+  const targetUrl = `${backend.url}/${path}`;
+  const apiKey = backend.key;
 
   const isPost = req.method === 'POST';
   const isStreaming = isPost && req.body?.stream === true;
   const isChatCompletions = path.endsWith('chat/completions');
 
-  console.log(`[PROXY] ${req.method} /${path}${isStreaming ? ' (stream)' : ''}`);
+  console.log(`[PROXY] ${req.method} /${path}${isStreaming ? ' (stream)' : ''} → ${backend.url}${model ? ` [${model}]` : ''}`);
 
   try {
     const headers = {
@@ -150,9 +171,34 @@ router.all('/mistral-proxy/*', async (req, res) => {
       pushToTtsClients({ type: 'start', gen });
 
       let accumulated = '';
-      let speakBuffer = '';  // Accumulates text to detect <speak> tags
+      let rawBuffer = '';     // Raw LLM output for tag detection
+      let inSpeak = false;    // Currently inside a <speak> block
+      let sentenceBuf = '';   // Accumulates text inside <speak> for sentence splitting
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
+
+      function flushSentences(force) {
+        const cleaned = cleanForSpeech(sentenceBuf);
+        const { sentences, remainder } = extractSentences(cleaned);
+        for (const sentence of sentences) {
+          if (sentence.length >= 3) {
+            console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${sentence.substring(0, 80)}"`);
+            responseChunks.chunks.push(sentence);
+            pushToTtsClients({ type: 'chunk', text: sentence, gen });
+          }
+        }
+        // Keep only the un-sentenced remainder for next round
+        sentenceBuf = remainder;
+        if (force && sentenceBuf.trim().length >= 3) {
+          const final = cleanForSpeech(sentenceBuf).trim();
+          if (final.length >= 3) {
+            console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${final.substring(0, 80)}"`);
+            responseChunks.chunks.push(final);
+            pushToTtsClients({ type: 'chunk', text: final, gen });
+          }
+          sentenceBuf = '';
+        }
+      }
 
       try {
         while (true) {
@@ -170,34 +216,41 @@ router.all('/mistral-proxy/*', async (req, res) => {
               const delta = parsed.choices?.[0]?.delta?.content;
               if (delta) {
                 accumulated += delta;
-                speakBuffer += delta;
+                rawBuffer += delta;
 
-                // Extract completed <speak>...</speak> blocks as they stream in
-                const speakRegex = /<speak>([\s\S]*?)<\/speak>/gi;
-                let speakMatch;
-                let lastSpeakEnd = 0;
-                while ((speakMatch = speakRegex.exec(speakBuffer)) !== null) {
-                  const spokenText = cleanForSpeech(speakMatch[1].trim());
-                  lastSpeakEnd = speakRegex.lastIndex;
-
-                  // Split spoken text into sentences for streaming TTS
-                  const { sentences, remainder } = extractSentences(spokenText);
-                  for (const sentence of sentences) {
-                    if (sentence.length >= 3) {
-                      console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${sentence.substring(0, 80)}"`);
-                      responseChunks.chunks.push(sentence);
-                      pushToTtsClients({ type: 'chunk', text: sentence, gen });
+                // Process the raw buffer for <speak> / </speak> transitions
+                while (rawBuffer.length > 0) {
+                  if (!inSpeak) {
+                    const openIdx = rawBuffer.indexOf('<speak>');
+                    if (openIdx === -1) {
+                      // No <speak> tag yet — might be partial, keep last 7 chars
+                      if (rawBuffer.length > 7) rawBuffer = rawBuffer.slice(-7);
+                      break;
                     }
+                    // Enter speak mode
+                    inSpeak = true;
+                    rawBuffer = rawBuffer.slice(openIdx + 7);
                   }
-                  if (remainder.trim().length >= 3) {
-                    console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${remainder.trim().substring(0, 80)}"`);
-                    responseChunks.chunks.push(remainder.trim());
-                    pushToTtsClients({ type: 'chunk', text: remainder.trim(), gen });
+
+                  if (inSpeak) {
+                    const closeIdx = rawBuffer.indexOf('</speak>');
+                    if (closeIdx === -1) {
+                      // Still inside <speak> — accumulate all available text
+                      // But keep last 8 chars in rawBuffer in case of partial </speak>
+                      const safe = rawBuffer.length > 8 ? rawBuffer.slice(0, -8) : '';
+                      if (safe) {
+                        sentenceBuf += safe;
+                        rawBuffer = rawBuffer.slice(safe.length);
+                        flushSentences(false);
+                      }
+                      break;
+                    }
+                    // Found </speak> — flush everything before it
+                    sentenceBuf += rawBuffer.slice(0, closeIdx);
+                    flushSentences(true);
+                    inSpeak = false;
+                    rawBuffer = rawBuffer.slice(closeIdx + 8);
                   }
-                }
-                // Keep only unmatched tail (potential partial <speak> tag)
-                if (lastSpeakEnd > 0) {
-                  speakBuffer = speakBuffer.slice(lastSpeakEnd);
                 }
               }
             } catch {}
@@ -207,15 +260,9 @@ router.all('/mistral-proxy/*', async (req, res) => {
         console.error('[PROXY] Stream error:', e.message);
       }
 
-      // Flush any remaining <speak> content
-      const finalSpoken = extractSpeakContent(speakBuffer);
-      if (finalSpoken.length >= 3) {
-        const cleaned = cleanForSpeech(finalSpoken);
-        if (cleaned.length >= 3) {
-          console.log(`[PROXY] Final speak chunk: "${cleaned.substring(0, 80)}"`);
-          responseChunks.chunks.push(cleaned);
-          pushToTtsClients({ type: 'chunk', text: cleaned, gen });
-        }
+      // Flush any remaining content inside an unclosed <speak> tag
+      if (inSpeak && sentenceBuf.trim().length >= 3) {
+        flushSentences(true);
       }
       responseChunks.done = true;
       pushToTtsClients({ type: 'done', gen });
