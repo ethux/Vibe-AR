@@ -193,6 +193,13 @@ export function initScene() {
   let _fistRotating = false;
   let _fistLastX = 0;
 
+  // Grab-drag state (right hand pinch on bubble → pull toward self = open, push = back)
+  let _draggedBubble    = null;
+  let _dragStartPinchZ  = 0;
+  const _dragOriginalPos = new THREE.Vector3();
+  const DRAG_OPEN_THRESHOLD = 0.05;   // 5cm pull toward self → open
+  const DRAG_BACK_THRESHOLD = -0.05;  // 5cm push away → navigate back
+
   // Gesture cooldown (ms)
   const GESTURE_COOLDOWN = 600;
 
@@ -255,9 +262,15 @@ export function initScene() {
               if (src.handedness === 'left') {
                 if (bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
               } else {
-                if (bubbleMgr.handlePinch(p.pinchPoint)) {
+                // Right hand: grab-drag to open (pull toward self) or go back (push away)
+                const grabbed = bubbleMgr.findClosestFreeBubble(p.pinchPoint);
+                if (grabbed) {
+                  _draggedBubble = grabbed;
+                  _dragStartPinchZ = p.pinchPoint.z;
+                  _dragOriginalPos.copy(grabbed.position);
+                  grabbed.userData.scaleTarget = 1.15; // slight grow feedback
                   _backSwipeActive = false;
-                  continue;
+                  continue; // don't fall through to window
                 }
                 // Right pinch in empty space → start back-swipe tracking
                 _backSwipeActive = true;
@@ -267,15 +280,40 @@ export function initScene() {
               wm.onPinchStart(handIdx, p.pinchPoint);
             }
           } else if (p.pinching && s.pinching && p.pinchPoint) {
-            wm.onPinchMove(handIdx, p.pinchPoint);
+            // Move grabbed bubble along Z while pinching
+            if (_draggedBubble && src.handedness === 'right') {
+              const dz = p.pinchPoint.z - _dragStartPinchZ;
+              _draggedBubble.position.set(
+                _dragOriginalPos.x,
+                _dragOriginalPos.y,
+                _dragOriginalPos.z + dz * 1.5
+              );
+            } else {
+              wm.onPinchMove(handIdx, p.pinchPoint);
+            }
           } else if (!p.pinching && s.pinching) {
             s.pinching = false;
-            wm.onPinchEnd(handIdx);
-            // Back-swipe: right hand pinch released after 7cm move → go back
-            if (src.handedness === 'right' && _backSwipeActive) {
-              _backSwipeActive = false;
-              if (p.pinchPoint && p.pinchPoint.distanceTo(_backSwipeStart) >= 0.07) {
-                bubbleMgr.navigateBack();
+            // Resolve grab-drag on release
+            if (_draggedBubble && src.handedness === 'right') {
+              const dz = p.pinchPoint ? p.pinchPoint.z - _dragStartPinchZ : 0;
+              if (dz > DRAG_OPEN_THRESHOLD) {
+                bubbleMgr.openBubble(_draggedBubble);           // pulled toward self → open
+              } else if (dz < DRAG_BACK_THRESHOLD) {
+                _draggedBubble.position.copy(_dragOriginalPos); // reset visual
+                bubbleMgr.navigateBack();                       // pushed away → go back
+              } else {
+                _draggedBubble.position.copy(_dragOriginalPos); // small move → cancel
+                _draggedBubble.userData.scaleTarget = 1;
+              }
+              _draggedBubble = null;
+            } else {
+              wm.onPinchEnd(handIdx);
+              // Back-swipe: right hand pinch released after 7cm move → go back
+              if (src.handedness === 'right' && _backSwipeActive) {
+                _backSwipeActive = false;
+                if (p.pinchPoint && p.pinchPoint.distanceTo(_backSwipeStart) >= 0.07) {
+                  bubbleMgr.navigateBack();
+                }
               }
             }
           }
