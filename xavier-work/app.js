@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────
-//  WebXR AR Draggable Window – Meta Quest
+//  WebXR AR – Pixel-Art Window System (Meta Quest)
+//  Uses WindowManager.js for window creation & management
 // ─────────────────────────────────────────────
 
 // ── Scene, Camera, Renderer ──────────────────
@@ -21,7 +22,7 @@ dirLight.position.set(2, 4, 3);
 dirLight.castShadow = true;
 scene.add(dirLight);
 
-// ── Shadow-receiving floor (invisible, just catches shadows) ──
+// ── Shadow-receiving floor ───────────────────
 const shadowFloorGeo = new THREE.PlaneGeometry(20, 20);
 const shadowFloorMat = new THREE.ShadowMaterial({ opacity: 0.3 });
 const shadowFloor = new THREE.Mesh(shadowFloorGeo, shadowFloorMat);
@@ -31,122 +32,52 @@ shadowFloor.receiveShadow = true;
 scene.add(shadowFloor);
 renderer.shadowMap.enabled = true;
 
-// ── Build the draggable "window" panel ───────
-const WINDOW_W = 0.6;
-const WINDOW_H = 0.45;
-const TITLEBAR_H = 0.06;
-const CORNER_R = 0.015;
+// ══════════════════════════════════════════════
+//  WINDOW MANAGER — create pixel-art windows
+// ══════════════════════════════════════════════
+const wm = new WindowManager(scene, renderer, camera);
 
-// -- Window body
-const bodyGeo = new THREE.PlaneGeometry(WINDOW_W, WINDOW_H);
-const bodyMat = new THREE.MeshStandardMaterial({
-  color: 0x1e1e2e, side: THREE.DoubleSide, transparent: true, opacity: 0.92,
-  roughness: 0.7, metalness: 0.1
+// Create the demo window with pixel-art Mistral-orange borders
+const mainWindow = wm.createWindow({
+  title:    'VIBE AR',
+  width:    0.6,
+  height:   0.45,
+  position: [0, 1.5, -0.8],
+  content:  (ctx, w, h) => {
+    // Black background is already drawn by the manager
+    ctx.fillStyle = '#F97316';
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('HELLO FROM WEBXR AR!', 30, 50);
+
+    ctx.fillStyle = '#FFB347';
+    ctx.font = '22px monospace';
+    const lines = [
+      '',
+      '  OPEN YOUR PALM TO',
+      '  SUMMON A MAGIC BUBBLE',
+      '',
+      '  PINCH THE TITLE BAR',
+      '  TO DRAG THIS WINDOW',
+      '',
+      '  CONTROLLERS WORK TOO',
+    ];
+    lines.forEach((l, i) => ctx.fillText(l, 20, 90 + i * 32));
+  }
 });
-const windowBody = new THREE.Mesh(bodyGeo, bodyMat);
 
-// -- Title bar (child of body)
-const titleGeo = new THREE.PlaneGeometry(WINDOW_W, TITLEBAR_H);
-const titleMat = new THREE.MeshStandardMaterial({
-  color: 0x3a3a5c, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.15
-});
-const titleBar = new THREE.Mesh(titleGeo, titleMat);
-titleBar.position.y = WINDOW_H / 2 - TITLEBAR_H / 2;
-titleBar.position.z = 0.001; // slightly in front
-windowBody.add(titleBar);
-
-// -- Title text (using canvas texture)
-function makeTextTexture(text, fontSize, color, bgColor, w, h) {
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (bgColor) { ctx.fillStyle = bgColor; ctx.fillRect(0, 0, w, h); }
-  ctx.fillStyle = color;
-  ctx.font = `bold ${fontSize}px Segoe UI, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, w / 2, h / 2);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.minFilter = THREE.LinearFilter;
-  return tex;
-}
-
-const titleTextGeo = new THREE.PlaneGeometry(WINDOW_W * 0.8, TITLEBAR_H * 0.7);
-const titleTextMat = new THREE.MeshBasicMaterial({
-  map: makeTextTexture('My Window', 48, '#ffffff', 'transparent', 512, 64),
-  transparent: true, depthWrite: false
-});
-const titleText = new THREE.Mesh(titleTextGeo, titleTextMat);
-titleText.position.z = 0.002;
-titleBar.add(titleText);
-
-// -- Window content area (some placeholder text)
-const contentGeo = new THREE.PlaneGeometry(WINDOW_W * 0.9, WINDOW_H * 0.7);
-const contentMat = new THREE.MeshBasicMaterial({
-  map: makeTextTexture(
-    'Hello from WebXR! 🎉\n\nGrab the title bar\nwith your controller\nto drag this window.',
-    32, '#ccccdd', 'transparent', 512, 384
-  ),
-  transparent: true, depthWrite: false
-});
-// multi-line canvas helper
-(function patchContent() {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 384;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#1e1e2e';
-  ctx.fillRect(0, 0, 512, 384);
-  ctx.fillStyle = '#ccccdd';
-  ctx.font = '28px Segoe UI, sans-serif';
-  const lines = [
-    'Hello from WebXR AR! 🎉', '',
-    '✋ Open your palm to',
-    '   summon a magic bubble!', '',
-    '🤏 Pinch the title bar',
-    '   to drag this window!', '',
-    '🎮 Controllers work too!'
-  ];
-  lines.forEach((l, i) => ctx.fillText(l, 30, 40 + i * 38));
-  contentMat.map = new THREE.CanvasTexture(c);
-  contentMat.map.minFilter = THREE.LinearFilter;
-})();
-
-const contentMesh = new THREE.Mesh(contentGeo, contentMat);
-contentMesh.position.y = -TITLEBAR_H / 2 - 0.01;
-contentMesh.position.z = 0.001;
-windowBody.add(contentMesh);
-
-// -- Border glow
-const borderGeo = new THREE.PlaneGeometry(WINDOW_W + 0.008, WINDOW_H + 0.008);
-const borderMat = new THREE.MeshBasicMaterial({
-  color: 0x6366f1, transparent: true, opacity: 0.3, side: THREE.DoubleSide
-});
-const border = new THREE.Mesh(borderGeo, borderMat);
-border.position.z = -0.002;
-windowBody.add(border);
-
-// -- Close button (red dot)
-const closeBtnGeo = new THREE.CircleGeometry(0.015, 24);
-const closeBtnMat = new THREE.MeshBasicMaterial({ color: 0xff5555 });
-const closeBtn = new THREE.Mesh(closeBtnGeo, closeBtnMat);
-closeBtn.position.set(WINDOW_W / 2 - 0.035, 0, 0.003);
-titleBar.add(closeBtn);
-
-// -- Minimize button (yellow dot)
-const minBtnMat = new THREE.MeshBasicMaterial({ color: 0xf1fa8c });
-const minBtn = new THREE.Mesh(closeBtnGeo.clone(), minBtnMat);
-minBtn.position.set(WINDOW_W / 2 - 0.075, 0, 0.003);
-titleBar.add(minBtn);
-
-// -- Maximize button (green dot)
-const maxBtnMat = new THREE.MeshBasicMaterial({ color: 0x50fa7b });
-const maxBtn = new THREE.Mesh(closeBtnGeo.clone(), maxBtnMat);
-maxBtn.position.set(WINDOW_W / 2 - 0.115, 0, 0.003);
-titleBar.add(maxBtn);
-
-// Place the window in front of the user
-windowBody.position.set(0, 1.5, -0.8);
-scene.add(windowBody);
+// ── Example: teammates can easily create more windows ──
+// const secondWindow = wm.createWindow({
+//   title:    'TERMINAL',
+//   width:    0.5,
+//   height:   0.35,
+//   position: [0.4, 1.5, -0.9],
+//   content:  (ctx, w, h) => {
+//     ctx.fillStyle = '#00ff00';
+//     ctx.font = '20px monospace';
+//     ctx.fillText('$ whoami', 20, 30);
+//     ctx.fillText('mistral-hacker', 20, 55);
+//   }
+// });
 
 // ── Controller setup ─────────────────────────
 const controllerGrip0 = renderer.xr.getControllerGrip(0);
@@ -159,13 +90,13 @@ const controller1 = renderer.xr.getController(1);
 scene.add(controller0);
 scene.add(controller1);
 
-// Visible ray lines
+// Visible ray lines (orange to match theme)
 function addRayVisual(ctrl) {
   const geo = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0, 0),
     new THREE.Vector3(0, 0, -3)
   ]);
-  const mat = new THREE.LineBasicMaterial({ color: 0x6366f1, linewidth: 2 });
+  const mat = new THREE.LineBasicMaterial({ color: 0xF97316, linewidth: 2 });
   ctrl.add(new THREE.Line(geo, mat));
 }
 addRayVisual(controller0);
@@ -180,51 +111,11 @@ function addControllerModel(grip) {
 addControllerModel(controllerGrip0);
 addControllerModel(controllerGrip1);
 
-// ── Drag logic ───────────────────────────────
-const raycaster = new THREE.Raycaster();
-const tempMatrix = new THREE.Matrix4();
-
-let dragging = false;
-let activeController = null;
-let dragOffset = new THREE.Vector3();
-
-// We track select events (trigger press) on each controller
-function onSelectStart(event) {
-  const ctrl = event.target;
-  tempMatrix.identity().extractRotation(ctrl.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-  // Test against the title bar (world)
-  const titleBarWorld = titleBar;
-  const hits = raycaster.intersectObject(titleBarWorld, true);
-  if (hits.length > 0) {
-    dragging = true;
-    activeController = ctrl;
-
-    // Compute offset: difference between window position and intersection point
-    const hitPoint = hits[0].point;
-    dragOffset.copy(windowBody.position).sub(hitPoint);
-
-    // Visual feedback
-    borderMat.opacity = 0.7;
-    titleMat.color.set(0x5a5a8c);
-  }
-}
-
-function onSelectEnd(event) {
-  if (dragging && event.target === activeController) {
-    dragging = false;
-    activeController = null;
-    borderMat.opacity = 0.3;
-    titleMat.color.set(0x3a3a5c);
-  }
-}
-
-controller0.addEventListener('selectstart', onSelectStart);
-controller0.addEventListener('selectend',   onSelectEnd);
-controller1.addEventListener('selectstart', onSelectStart);
-controller1.addEventListener('selectend',   onSelectEnd);
+// ── Controller select → route to WindowManager ──
+controller0.addEventListener('selectstart', (e) => wm.onSelectStart(e.target));
+controller0.addEventListener('selectend',   (e) => wm.onSelectEnd(e.target));
+controller1.addEventListener('selectstart', (e) => wm.onSelectStart(e.target));
+controller1.addEventListener('selectend',   (e) => wm.onSelectEnd(e.target));
 
 // ── Enter AR button ──────────────────────────
 const vrButton = document.getElementById('enter-vr');
@@ -316,8 +207,8 @@ const HAND_JOINTS = [
 
 let hand0, hand1;
 const handStates = [
-  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, dragging: false, dragOffset: new THREE.Vector3(), handedness: 'left' },
-  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, dragging: false, dragOffset: new THREE.Vector3(), handedness: 'right' }
+  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, handedness: 'left' },
+  { jointMeshes: [], bubble: null, bubbleScale: 0, palmOpen: false, palmOpenSmooth: 0, pinching: false, handedness: 'right' }
 ];
 
 // Joint visual material
@@ -518,23 +409,8 @@ renderer.setAnimationLoop((timestamp, frame) => {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
 
-  // ── Controller-based drag ──
-  if (dragging && activeController) {
-    tempMatrix.identity().extractRotation(activeController.matrixWorld);
-    raycaster.ray.origin.setFromMatrixPosition(activeController.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-    const dist = windowBody.position.distanceTo(raycaster.ray.origin);
-    const target = raycaster.ray.origin.clone()
-      .add(raycaster.ray.direction.clone().multiplyScalar(dist));
-    target.add(dragOffset);
-
-    windowBody.position.lerp(target, 0.5);
-
-    const camPos = new THREE.Vector3();
-    camera.getWorldPosition(camPos);
-    windowBody.lookAt(camPos);
-  }
+  // ── Update WindowManager (handles controller drag, hover, resize) ──
+  wm.update(frame, dt, elapsed, [controller0, controller1]);
 
   // ── Hand tracking update ──
   if (frame && renderer.xr.isPresenting) {
@@ -640,44 +516,29 @@ renderer.setAnimationLoop((timestamp, frame) => {
           });
         }
 
-        // ── Hand pinch drag for the window ──
+        // ── Hand pinch → route to WindowManager ──
         const pinchResult = detectPinch(inputSource, frame, refSpace);
-        if (pinchResult.pinching && !state.pinching && !dragging) {
+        if (pinchResult.pinching && !state.pinching) {
           state.pinching = true;
           if (pinchResult.pinchPoint) {
-            const titleWorldPos = new THREE.Vector3();
-            titleBar.getWorldPosition(titleWorldPos);
-            const distToTitle = pinchResult.pinchPoint.distanceTo(titleWorldPos);
-            if (distToTitle < 0.15) {
-              state.dragging = true;
-              state.dragOffset.copy(windowBody.position).sub(pinchResult.pinchPoint);
-              borderMat.opacity = 0.7;
-              titleMat.color.set(0x5a5a8c);
-            }
+            wm.onPinchStart(idx, pinchResult.pinchPoint);
           }
         } else if (!pinchResult.pinching && state.pinching) {
           state.pinching = false;
-          if (state.dragging) {
-            state.dragging = false;
-            borderMat.opacity = 0.3;
-            titleMat.color.set(0x3a3a5c);
-          }
+          wm.onPinchEnd(idx);
         }
 
-        if (state.dragging && pinchResult.pinchPoint) {
-          const target = pinchResult.pinchPoint.clone().add(state.dragOffset);
-          windowBody.position.lerp(target, 0.4);
-          const camPos = new THREE.Vector3();
-          camera.getWorldPosition(camPos);
-          windowBody.lookAt(camPos);
+        if (state.pinching && pinchResult.pinchPoint) {
+          wm.onPinchMove(idx, pinchResult.pinchPoint);
+        }
+
+        // ── Hand hover detection (index finger tip) ──
+        const indexTipPos = getJointPos(inputSource, 'index-finger-tip', frame, refSpace);
+        if (indexTipPos) {
+          wm.updateHandHover(idx, indexTipPos);
         }
       });
     }
-  }
-
-  // Subtle idle animation
-  if (!dragging && !handStates[0].dragging && !handStates[1].dragging) {
-    windowBody.position.y += Math.sin(elapsed * 0.8) * 0.0002;
   }
 
   renderer.render(scene, camera);
