@@ -37,6 +37,29 @@ export async function speakReply() {
   log('[TTS] Timeout waiting for Vibe response');
 }
 
+/** Strip code blocks, tool calls, and markdown — keep only spoken text */
+function cleanForSpeech(text) {
+  return text
+    // Remove fenced code blocks (```...```)
+    .replace(/```[\s\S]*?```/g, '')
+    // Remove inline code (`...`)
+    .replace(/`[^`]+`/g, '')
+    // Remove markdown headers (# ## ###)
+    .replace(/^#{1,6}\s+/gm, '')
+    // Remove markdown bold/italic
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+    // Remove markdown links [text](url) → text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove file paths (/foo/bar.js, ./src/thing.ts)
+    .replace(/(?:^|\s)[.\/][\w\/.-]+\.\w+/g, '')
+    // Remove tool call patterns (common in coding agents)
+    .replace(/^(Reading|Writing|Searching|Running|Executing|Created|Modified|Deleted)\s.*$/gm, '')
+    // Collapse whitespace
+    .replace(/\n{2,}/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Keep these as no-ops so terminal.js import doesn't break
 export function enableTtsCollecting() {}
 export function onTermOutput() {}
