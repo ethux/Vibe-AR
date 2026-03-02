@@ -488,43 +488,66 @@ class ManagedWindow {
     this._borderMeshes.bottom = botMesh;
   }
 
-  // ── Bottom bar: slim drag handle + close (8:1 max aspect) ────
+  // ── Bottom bar: centered pill drag handle + small close dot ──
   _buildBottomBar(W, H, barH, border) {
     const totalContentH = this._contentH;
-    // Very slim bar — height is barH (0.02m default), but we shrink it
-    const slimH = Math.min(barH, W / 8); // enforce max 8:1 width:height
-    const barY = -totalContentH / 2 - 0.015 - slimH / 2; // below the bottom border
 
-    // ── Drag handle bar ──
-    const dragCanvas = PixelArt.makeDragBarIcon(24, 4, PixelArt.ORANGE, null);
-    const dragTex = new THREE.CanvasTexture(dragCanvas);
-    dragTex.minFilter = THREE.NearestFilter;
-    dragTex.magFilter = THREE.NearestFilter;
+    // Fixed sizes — independent of window width
+    const PILL_H   = 0.008;  // 3-"pixel" height pill
+    const PILL_W   = W * 0.45; // narrower than window, centered
+    const CLOSE_W  = 0.012;  // small square close button
+    const GAP      = 0.008;  // gap between pill and close button
+    const GROUP_W  = PILL_W + GAP + CLOSE_W;
+    const barY     = -totalContentH / 2 - 0.015 - PILL_H / 2 - 0.004;
 
-    const closeBtnW = slimH; // square close button
-    const dragBarW = W - closeBtnW - 0.01; // rest of the width minus close + gap
-    const dragGeo = new THREE.PlaneGeometry(dragBarW, slimH);
+    // ── Pill drag bar — white rounded rect drawn on canvas ──
+    const pillCanvas = document.createElement('canvas');
+    // Low-res canvas scaled up = pixelated look
+    const PC_W = 48; const PC_H = 6;
+    pillCanvas.width = PC_W; pillCanvas.height = PC_H;
+    const pctx = pillCanvas.getContext('2d');
+    pctx.imageSmoothingEnabled = false;
+    // Rounded pill: fill center, leave 1px corner pixels empty (pixel-art rounded)
+    pctx.fillStyle = '#ffffff';
+    pctx.fillRect(1, 0, PC_W - 2, PC_H);     // horizontal fill
+    pctx.fillRect(0, 1, 1, PC_H - 2);         // left edge
+    pctx.fillRect(PC_W - 1, 1, 1, PC_H - 2); // right edge
+
+    const pillTex = new THREE.CanvasTexture(pillCanvas);
+    pillTex.minFilter = THREE.NearestFilter;
+    pillTex.magFilter = THREE.NearestFilter;
+
+    const dragGeo = new THREE.PlaneGeometry(PILL_W, PILL_H);
     this._dragBarMat = new THREE.MeshBasicMaterial({
-      map: dragTex, transparent: true, opacity: 0.35, side: THREE.DoubleSide
+      map: pillTex, transparent: true, opacity: 0.35, side: THREE.DoubleSide
     });
     this.dragBarMesh = new THREE.Mesh(dragGeo, this._dragBarMat);
-    this.dragBarMesh.position.set(-(W - dragBarW) / 2 + closeBtnW / 2, barY, 0.001);
-    this._dragBarBaseScale = 1.0;
+    // Center the group, pill sits on the left of group
+    this.dragBarMesh.position.set(-GROUP_W / 2 + PILL_W / 2, barY, 0.001);
     this.root.add(this.dragBarMesh);
 
-    // ── Close "X" button (square, same height as bar) ──
-    const closeCanvas = PixelArt.makeCloseIcon(6, PixelArt.ORANGE, null);
+    // ── Close button — white rounded square on canvas ──
+    const closeCanvas = document.createElement('canvas');
+    const CC = 8;
+    closeCanvas.width = CC; closeCanvas.height = CC;
+    const cctx = closeCanvas.getContext('2d');
+    cctx.imageSmoothingEnabled = false;
+    // Rounded square: fill minus corners
+    cctx.fillStyle = '#ffffff';
+    cctx.fillRect(1, 0, CC - 2, CC);
+    cctx.fillRect(0, 1, CC, CC - 2);
+
     const closeTex = new THREE.CanvasTexture(closeCanvas);
     closeTex.minFilter = THREE.NearestFilter;
     closeTex.magFilter = THREE.NearestFilter;
 
-    const closeGeo = new THREE.PlaneGeometry(closeBtnW, slimH);
+    const closeGeo = new THREE.PlaneGeometry(CLOSE_W, CLOSE_W);
     this._closeBtnMat = new THREE.MeshBasicMaterial({
       map: closeTex, transparent: true, opacity: 0.35, side: THREE.DoubleSide
     });
     this.closeBtnMesh = new THREE.Mesh(closeGeo, this._closeBtnMat);
-    this.closeBtnMesh.position.set(W / 2 - closeBtnW / 2, barY, 0.001);
-    this._closeBtnBaseScale = 1.0;
+    // Close button sits on the right of group
+    this.closeBtnMesh.position.set(-GROUP_W / 2 + PILL_W + GAP + CLOSE_W / 2, barY, 0.001);
     this.root.add(this.closeBtnMesh);
   }
 
@@ -533,15 +556,10 @@ class ManagedWindow {
     this._resizeHandles = {};
     const handleSize = 0.03;
 
-    const resizeCanvas = PixelArt.makeResizeIcon(5, PixelArt.ORANGE_LIGHT);
-    const resizeTex = new THREE.CanvasTexture(resizeCanvas);
-    resizeTex.minFilter = THREE.NearestFilter;
-    resizeTex.magFilter = THREE.NearestFilter;
-
     const makeHandle = (name, x, y, rotZ) => {
       const geo = new THREE.PlaneGeometry(handleSize, handleSize);
       const mat = new THREE.MeshBasicMaterial({
-        map: resizeTex, transparent: true, opacity: 0.0, side: THREE.DoubleSide
+        color: 0xF97316, transparent: true, opacity: 0.0, side: THREE.DoubleSide
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x, y, 0.002);
@@ -611,37 +629,26 @@ class ManagedWindow {
     // Animate hover effects
     this._updateHover(dt);
 
-    // Subtle idle float
-    if (!this.dragging && !this.resizing) {
-      this.root.position.y += Math.sin(elapsed * 0.8 + this.zIndex * 0.5) * 0.0002;
-    }
+    // (no idle float — window stays where the user placed it)
   }
 
   _updateHover(dt) {
     const lerpSpeed = 8;
 
-    // Drag bar hover → scale up + opaque
+    // Drag bar hover → scale up + fully opaque
     const dragHover = this.hoverTarget === 'dragBar';
-    const dragTargetScale = dragHover ? 1.25 : 1.0;
+    const dragTargetScale = dragHover ? 1.15 : 1.0;
     const dragTargetOpacity = dragHover ? 0.9 : 0.35;
     this._dragBarMat.opacity += (dragTargetOpacity - this._dragBarMat.opacity) * lerpSpeed * dt;
     const cs = this.dragBarMesh.scale.x;
     const ns = cs + (dragTargetScale - cs) * lerpSpeed * dt;
-    this.dragBarMesh.scale.set(ns, ns, 1);
+    this.dragBarMesh.scale.set(ns, 1, 1); // scale only horizontally (keep height)
 
-    // Close button hover → scale up + opaque + red tint
+    // Close button hover → scale up + fully opaque
     const closeHover = this.hoverTarget === 'closeBtn';
     const closeTargetScale = closeHover ? 1.4 : 1.0;
     const closeTargetOpacity = closeHover ? 1.0 : 0.35;
     this._closeBtnMat.opacity += (closeTargetOpacity - this._closeBtnMat.opacity) * lerpSpeed * dt;
-    if (closeHover) {
-      this._closeBtnMat.color = this._closeBtnMat.color || new THREE.Color(1, 1, 1);
-      this._closeBtnMat.color.lerp(new THREE.Color(1, 0.3, 0.3), lerpSpeed * dt);
-    } else {
-      if (this._closeBtnMat.color) {
-        this._closeBtnMat.color.lerp(new THREE.Color(1, 1, 1), lerpSpeed * dt);
-      }
-    }
     const ccs = this.closeBtnMesh.scale.x;
     const cns = ccs + (closeTargetScale - ccs) * lerpSpeed * dt;
     this.closeBtnMesh.scale.set(cns, cns, 1);
