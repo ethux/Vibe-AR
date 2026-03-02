@@ -288,6 +288,17 @@ export function initScene() {
                 _dragOriginalPos.y,
                 _dragOriginalPos.z + dz * 1.5
               );
+
+              // Folders: auto-open when bubble reaches ~35cm from camera (entering the folder)
+              if (_draggedBubble.userData.fileData?.type === 'folder') {
+                const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+                const camPos = new THREE.Vector3();
+                xrCam.getWorldPosition(camPos);
+                if (_draggedBubble.position.distanceTo(camPos) < 0.35) {
+                  bubbleMgr.openBubble(_draggedBubble);
+                  _draggedBubble = null;
+                }
+              }
             } else {
               wm.onPinchMove(handIdx, p.pinchPoint);
             }
@@ -296,13 +307,14 @@ export function initScene() {
             // Resolve grab-drag on release
             if (_draggedBubble && src.handedness === 'right') {
               const dz = p.pinchPoint ? p.pinchPoint.z - _dragStartPinchZ : 0;
-              if (dz > DRAG_OPEN_THRESHOLD) {
-                bubbleMgr.openBubble(_draggedBubble);           // pulled toward self → open
+              const isFolder = _draggedBubble.userData.fileData?.type === 'folder';
+              if (!isFolder && dz > DRAG_OPEN_THRESHOLD) {
+                bubbleMgr.openBubble(_draggedBubble);           // file: pull toward self → open
               } else if (dz < DRAG_BACK_THRESHOLD) {
-                _draggedBubble.position.copy(_dragOriginalPos); // reset visual
-                bubbleMgr.navigateBack();                       // pushed away → go back
+                _draggedBubble.position.copy(_dragOriginalPos);
+                bubbleMgr.navigateBack();                       // push away → go back
               } else {
-                _draggedBubble.position.copy(_dragOriginalPos); // small move → cancel
+                _draggedBubble.position.copy(_dragOriginalPos); // small move or folder → cancel
                 _draggedBubble.userData.scaleTarget = 1;
               }
               _draggedBubble = null;
