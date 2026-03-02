@@ -37,6 +37,7 @@ class CodeCityRenderer {
     // Tooltip state
     this._tooltipWindow = null;
     this._hoveredEntry = null;
+    this._hoverLockUntil = 0; // timestamp — prevent flicker by holding tooltip briefly
 
     // Raycaster for hover detection
     this._raycaster = new THREE.Raycaster();
@@ -57,6 +58,9 @@ class CodeCityRenderer {
       { grabbing: false, offset: new THREE.Vector3(), point: new THREE.Vector3() }
     ];
     this._twoHandAnchor = null;
+
+    // Matrix rain effects per building
+    this._matrixEffects = [];
   }
 
   // ── Analyze code via server ──────────────────────────────────
@@ -170,13 +174,18 @@ class CodeCityRenderer {
         const d = Math.max(0.08, b.depth || 0.2);
 
         const geo = new THREE.BoxGeometry(w, h, d);
-        const color = new THREE.Color(b.color || '#3B82F6');
+
+        // Matrix rain canvas texture per building
+        const matFx = this._initMatrixEffect(b, w, h);
+        this._matrixEffects.push(matFx);
+
         const mat = new THREE.MeshStandardMaterial({
-          color: color,
-          roughness: 0.4,
-          metalness: 0.1,
-          emissive: color,
-          emissiveIntensity: 0.15
+          color: 0x000000,
+          emissive: new THREE.Color(1, 1, 1),
+          emissiveMap: matFx.texture,
+          emissiveIntensity: 1.0,
+          roughness: 0.9,
+          metalness: 0.0,
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(b.x || 0, h / 2, b.z || 0);
@@ -367,71 +376,33 @@ class CodeCityRenderer {
     this._hideTooltip();
 
     const hp = this._rightHandPos;
-    const tooltipPos = hp ? [hp.x, hp.y + 0.15, hp.z] : [-0.5, 1.5, -0.8];
+    const tooltipPos = hp ? [hp.x, hp.y + 0.12, hp.z] : [-0.5, 1.5, -0.8];
 
     this._tooltipWindow = this.wm.createWindow({
       title: entry.name || 'BUILDING',
-      width: 0.5,
-      height: 0.35,
+      width: 0.22,
+      height: 0.12,
       position: tooltipPos,
       content: (ctx, w, h) => {
-        let y = 10;
-
-        // Type badge
         const typeColors = {
           'class': '#F97316',
           'function': '#3B82F6',
           'variable': '#22C55E',
           'import': '#A855F7'
         };
-        const typeColor = typeColors[entry.type] || '#888';
-        ctx.fillStyle = typeColor;
-        ctx.font = 'bold 18px monospace';
-        ctx.fillText(entry.type ? entry.type.toUpperCase() : 'UNKNOWN', 20, y += 22);
+        ctx.fillStyle = typeColors[entry.type] || '#888';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText(entry.type ? entry.type.toUpperCase() : '?', 10, 18);
 
-        // Name
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 20px monospace';
-        ctx.fillText(entry.name || '???', 20, y += 28);
+        ctx.font = 'bold 14px monospace';
+        const name = (entry.name || '???').substring(0, 20);
+        ctx.fillText(name, 10, 38);
 
-        // Metrics
         if (entry.metrics) {
           ctx.fillStyle = '#FFB347';
-          ctx.font = '14px monospace';
-          y += 8;
-          const m = entry.metrics;
-          ctx.fillText(`LOC: ${m.loc || '?'}  Complexity: ${m.complexity || '?'}  Params: ${m.params || '?'}`, 20, y += 18);
-        }
-
-        // Explanation
-        if (entry.explanation) {
-          ctx.fillStyle = '#aaa';
-          ctx.font = '14px monospace';
-          y += 10;
-          // Word wrap
-          const maxW = w - 40;
-          let line = '';
-          for (const word of entry.explanation.split(' ')) {
-            const test = line + word + ' ';
-            if (ctx.measureText(test).width > maxW && line) {
-              ctx.fillText(line, 20, y += 18);
-              line = word + ' ';
-            } else {
-              line = test;
-            }
-          }
-          if (line) ctx.fillText(line, 20, y += 18);
-        }
-
-        // Code preview
-        if (entry.codePreview) {
-          ctx.fillStyle = '#666';
-          ctx.font = '12px monospace';
-          y += 12;
-          const previewLines = entry.codePreview.split('\n').slice(0, 3);
-          for (const pl of previewLines) {
-            ctx.fillText(pl.substring(0, 60), 20, y += 16);
-          }
+          ctx.font = '11px monospace';
+          ctx.fillText(`LOC:${entry.metrics.loc || '?'} C:${entry.metrics.complexity || '?'}`, 10, 55);
         }
       }
     });
@@ -555,6 +526,12 @@ class CodeCityRenderer {
     this.hotspotRings = [];
     this.districtPlates = [];
 
+    // Dispose matrix rain textures
+    for (const fx of this._matrixEffects) {
+      if (fx.texture) fx.texture.dispose();
+    }
+    this._matrixEffects = [];
+
     // Close control panel & tooltip
     if (this._controlPanel) {
       this._controlPanel.close();
@@ -563,5 +540,87 @@ class CodeCityRenderer {
     this._hideTooltip();
     this._layout = null;
     this._hoveredEntry = null;
+  }
+
+  // ── Matrix rain colour palette by building type ──────────────
+  _matrixPalette(type) {
+    const p = {
+      'class':    { bright: '#FFCC44', mid: '#F97316' }, // Mistral orange
+      'function': { bright: '#93C5FD', mid: '#3B82F6' }, // blue
+      'variable': { bright: '#86EFAC', mid: '#22C55E' }, // green
+      'import':   { bright: '#E9D5FF', mid: '#A855F7' }, // purple
+    };
+    return p[type] || p['class'];
+  }
+
+  // ── Init per-building matrix canvas + CanvasTexture ──────────
+  _initMatrixEffect(building, bw, bh) {
+    const CW = 128, CH = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width  = CW;
+    canvas.height = CH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CW, CH);
+
+    const palette = this._matrixPalette(building.type);
+    const FS   = 9; // font-size px
+    const cols = Math.floor(CW / FS);
+
+    // Taller / larger buildings → faster rain
+    const heightNorm = Math.min(1.0, Math.max(0.1, bh / 0.4));
+    const baseSpeed  = 5 + heightNorm * 15; // chars/sec: 5–20
+
+    const drops = Array.from({ length: cols }, () => ({
+      y:         Math.random() * (CH / FS), // start at random row
+      speed:     baseSpeed * (0.6 + Math.random() * 0.8),
+      waitUntil: Math.random() * 1.5,       // stagger start
+    }));
+
+    const texture = new THREE.CanvasTexture(canvas);
+    return { canvas, ctx, cols, drops, palette, FS, CW, CH, texture, elapsed: 0 };
+  }
+
+  // ── Tick: update every building's matrix canvas ──────────────
+  updateMatrix(dt) {
+    if (!this._matrixEffects.length) return;
+
+    const CHARS = '01{}[]()=+-*/;:.#<>!&|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const cdt   = Math.min(dt, 0.05); // cap jump at 50 ms
+
+    for (const fx of this._matrixEffects) {
+      const { ctx, cols, drops, palette, FS, CW, CH, texture } = fx;
+      fx.elapsed += cdt;
+
+      // Semi-transparent black overlay — creates the fade trail
+      const fadeA = Math.min(0.9, 0.04 * cdt * 60);
+      ctx.fillStyle = `rgba(0,0,0,${fadeA.toFixed(3)})`;
+      ctx.fillRect(0, 0, CW, CH);
+
+      ctx.font = `bold ${FS}px monospace`;
+
+      for (let i = 0; i < cols; i++) {
+        const drop = drops[i];
+        if (fx.elapsed < drop.waitUntil) continue;
+
+        const x    = i * FS;
+        const y    = drop.y * FS;
+        const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+
+        // Bright leading character
+        ctx.fillStyle = palette.bright;
+        ctx.fillText(char, x, y);
+
+        drop.y += drop.speed * cdt;
+
+        // Reset drop off bottom → random gap before restarting
+        if (drop.y * FS > CH) {
+          drop.y         = -(Math.random() * 3);
+          drop.waitUntil = fx.elapsed + Math.random() * 1.2;
+        }
+      }
+
+      texture.needsUpdate = true;
+    }
   }
 }
