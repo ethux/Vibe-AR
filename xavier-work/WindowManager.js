@@ -542,7 +542,7 @@ class WindowManager {
 
   // ── Per-frame update (call from animation loop) ───────────────
 
-  update(frame, dt, elapsed, controllers) {
+  update(frame, dt, elapsed, controllers, activeCamera) {
     // ── Hover detection via controllers ──
     if (controllers) {
       // Reset all hover states
@@ -616,6 +616,18 @@ class WindowManager {
       const currentPoint = this._raycaster.ray.origin.clone()
         .add(this._raycaster.ray.direction.clone().multiplyScalar(dist));
       this._updateResize(currentPoint);
+    }
+
+    // Billboard: make dragged windows face the camera (orthogonal to camera normal)
+    // Skip windows in two-hand transform mode (they have explicit rotation)
+    const cam = activeCamera || this.camera;
+    const twoHandWin = this._twoHandAnchor
+      ? (this._handDragState[0].window || this._handDragState[1].window)
+      : null;
+    for (const win of this.windows) {
+      if (!win.closed && win.visible && win.dragging && win !== twoHandWin) {
+        win.root.quaternion.copy(cam.quaternion);
+      }
     }
 
     // ── Update all windows ──

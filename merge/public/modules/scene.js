@@ -344,11 +344,9 @@ export function initScene() {
       }
     }
 
-    // WindowManager update (hover, drag, resize animations)
-    wm.update(frame, dt, elapsed, [ctrl0, ctrl1]);
-
-    // Update mascot animations (billboarding, redraw canvas)
+    // WindowManager update (hover, drag, resize animations, billboarding)
     const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    wm.update(frame, dt, elapsed, [ctrl0, ctrl1], xrCamera);
     animMgr.update(dt, elapsed, xrCamera);
 
     // Update CodeCity (matrix rain, finger-touch tooltips)

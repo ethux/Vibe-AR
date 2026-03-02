@@ -13,6 +13,7 @@ Usage:
 import asyncio
 import argparse
 import io
+import json
 import os
 import ssl
 import sys
@@ -36,21 +37,33 @@ except ImportError:
     print("pip install Pillow")
     sys.exit(1)
 
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False  # don't throw if cursor hits corner
+    pyautogui.PAUSE = 0         # no delay between actions
+except ImportError:
+    pyautogui = None
+    print("WARNING: pip install pyautogui — remote cursor control disabled")
+
 
 # ── Globals ──────────────────────────────────────────────────────────
 viewers = set()
 latest_frame = None
+screen_w = 0
+screen_h = 0
 
 
 # ── Screen capture loop (runs in a thread) ───────────────────────────
 def capture_loop(fps, scale, quality):
     """Grab screen, resize, compress to JPEG, store as latest_frame."""
-    global latest_frame
+    global latest_frame, screen_w, screen_h
     interval = 1.0 / fps
 
     with mss.mss() as sct:
         monitor = sct.monitors[1]  # primary screen
-        print(f"Capturing: {monitor['width']}x{monitor['height']} → scale {scale}px, "
+        screen_w = monitor['width']
+        screen_h = monitor['height']
+        print(f"Capturing: {screen_w}x{screen_h} → scale {scale}px, "
               f"quality {quality}%, {fps} fps")
 
         while True:
@@ -96,6 +109,30 @@ async def broadcast_loop(fps):
         await asyncio.sleep(interval)
 
 
+# ── Mouse control from Quest ─────────────────────────────────────────
+def handle_mouse_command(msg):
+    """Process a JSON mouse command from the Quest viewer."""
+    if not pyautogui or screen_w == 0:
+        return
+    try:
+        data = json.loads(msg)
+        u = data.get('u', 0)
+        v = data.get('v', 0)
+        # Convert UV (0-1) to screen pixel coordinates
+        px = int(u * screen_w)
+        py = int(v * screen_h)
+        px = max(0, min(screen_w - 1, px))
+        py = max(0, min(screen_h - 1, py))
+
+        cmd = data.get('type')
+        if cmd == 'move':
+            pyautogui.moveTo(px, py, _pause=False)
+        elif cmd == 'click':
+            pyautogui.click(px, py, _pause=False)
+    except Exception as e:
+        print(f"[mouse] error: {e}")
+
+
 # ── WebSocket handler ────────────────────────────────────────────────
 async def handler(ws):
     viewers.add(ws)
@@ -108,8 +145,10 @@ async def handler(ws):
             viewers.discard(ws)
             return
     try:
-        async for _ in ws:
-            pass
+        async for message in ws:
+            # Binary = ignore, Text = JSON mouse command
+            if isinstance(message, str):
+                handle_mouse_command(message)
     except websockets.ConnectionClosed:
         pass
     finally:

@@ -213,7 +213,7 @@ class WindowManager {
 
   // ── Per-frame update ───────────────────────────────────────────
 
-  update(frame, dt, elapsed, controllers) {
+  update(frame, dt, elapsed, controllers, activeCamera) {
     if (controllers) {
       this.windows.forEach(w => { w.hoverTarget = null; });
       for (const ctrl of controllers) {
@@ -248,6 +248,14 @@ class WindowManager {
       const currentPoint = this._raycaster.ray.origin.clone()
         .add(this._raycaster.ray.direction.clone().multiplyScalar(dist));
       this._updateResize(currentPoint);
+    }
+
+    // Billboard: make dragged windows face the camera (orthogonal to camera normal)
+    const cam = activeCamera || this.camera;
+    for (const win of this.windows) {
+      if (!win.closed && win.visible && win.dragging) {
+        win.root.quaternion.copy(cam.quaternion);
+      }
     }
 
     for (const win of this.windows) win.update(dt, elapsed);

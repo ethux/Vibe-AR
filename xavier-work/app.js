@@ -577,8 +577,9 @@ renderer.setAnimationLoop((timestamp, frame) => {
   const dt = clock.getDelta();
   const elapsed = clock.elapsedTime;
 
-  // ── Update WindowManager (handles controller drag, hover, resize) ──
-  wm.update(frame, dt, elapsed, [controller0, controller1]);
+  // ── Update WindowManager (handles controller drag, hover, resize, billboarding) ──
+  const activeCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  wm.update(frame, dt, elapsed, [controller0, controller1], activeCamera);
 
   // ── Matrix rain: update all building canvas textures ──
   codeCity.updateMatrix(dt);
