@@ -15,6 +15,8 @@ router.post('/api/scene-control', (req, res) => {
     return res.status(400).json({ ok: false, error: 'Missing action' });
   }
 
+  console.log(`[SCENE-CONTROL] ➜ Relaying action: ${command.action}`, JSON.stringify(command).slice(0, 200));
+
   let delivered = 0;
   const msg = JSON.stringify(command);
   for (const ws of clients) {
@@ -24,6 +26,7 @@ router.post('/api/scene-control', (req, res) => {
     }
   }
 
+  console.log(`[SCENE-CONTROL] ➜ Delivered "${command.action}" to ${delivered}/${clients.size} client(s)`);
   res.json({ ok: true, delivered, action: command.action });
 });
 

@@ -265,21 +265,26 @@ function _showNotification(message, duration = 3, color = '#FF7000') {
 
 async function _runTerminalCommand(command) {
   if (!command) return;
+  log(`[SCENE-CTRL] *** TERMINAL_COMMAND received: ${command}`);
+  console.warn(`[SCENE-CTRL] *** TERMINAL_COMMAND: ${command}`); // ensure it shows in Quest console
   try {
     // Send command to vibe-terminal via ttyd WebSocket (NOT companion container)
-    // This ensures dev servers run in the correct container where ports are exposed
-    log(`[SCENE-CTRL] Running command in vibe-terminal: ${command}`);
+    log(`[SCENE-CTRL] Calling /api/terminal/exec...`);
     const resp = await fetch(`/api/terminal/exec?command=${encodeURIComponent(command)}`, {
       method: 'POST',
     });
     const data = await resp.json();
     if (!resp.ok) {
-      log(`[SCENE-CTRL] Terminal exec error: ${data.error}`);
+      log(`[SCENE-CTRL] Terminal exec FAILED: status=${resp.status} error=${data.error}`);
+      console.error(`[SCENE-CTRL] Terminal exec FAILED:`, data);
     } else {
-      log(`[SCENE-CTRL] Terminal exec ok: ${command}`);
+      log(`[SCENE-CTRL] Terminal exec SUCCESS: ${command}`);
+      log(`[SCENE-CTRL] Terminal output: ${(data.output || '').slice(0, 200)}`);
+      console.log(`[SCENE-CTRL] Terminal exec response:`, data);
     }
   } catch (e) {
-    log(`[SCENE-CTRL] Terminal command failed: ${e.message}`);
+    log(`[SCENE-CTRL] Terminal command EXCEPTION: ${e.message}`);
+    console.error(`[SCENE-CTRL] Terminal command EXCEPTION:`, e);
   }
 }
 
