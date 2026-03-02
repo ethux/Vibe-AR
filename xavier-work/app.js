@@ -44,6 +44,16 @@ const animMgr = new AnimationManager(scene);
 // ══════════════════════════════════════════════
 const codeCity = new CodeCityRenderer(scene, camera, wm);
 
+// ══════════════════════════════════════════════
+//  SCREEN STREAM — live Mac screen capture
+// ══════════════════════════════════════════════
+try {
+  const screenStream = new StreamScreenWindow(wm);
+  screenStream.open({ position: [-0.5, 1.5, -0.8] });
+} catch (e) {
+  console.warn('StreamScreen init failed:', e);
+}
+
 // Demo: open a file viewer window with sample code
 const demoEditor = fileViewer.open({
   filename: 'calculator.py',
