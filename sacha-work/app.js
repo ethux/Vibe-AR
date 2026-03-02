@@ -773,6 +773,10 @@ function detectFist(inputSource, frame, refSpace) {
 let _fistRotating = false;
 let _fistLastX = 0;
 
+// State for "go back" swipe: pinch in empty space + move 7 cm before releasing
+let _backSwipeActive = false;
+let _backSwipeStart = new THREE.Vector3();
+
 // ── Animation loop ───────────────────────────
 const clock = new THREE.Clock();
 let handDetectedOnce = false;
@@ -925,37 +929,37 @@ renderer.setAnimationLoop((timestamp, frame) => {
                 borderMat.opacity = 0.7;
                 titleMat.color.set(0x5a5a8c);
               } else {
-                // Context bubble → remove
-                let palmClosest = null, palmDist = 0.12, palmIdx = -1;
-                palmBubbles.forEach((b, pi) => {
+                // 1. Free bubble (priority) → add to context
+                let closest = null, closestDist = 0.12;
+                fileBubbles.forEach(b => {
+                  if (b.userData.inPalm) return;
                   const d = pinchResult.pinchPoint.distanceTo(b.position);
-                  if (d < palmDist) { palmDist = d; palmClosest = b; palmIdx = pi; }
+                  if (d < closestDist) { closestDist = d; closest = b; }
                 });
-                if (palmClosest) {
-                  palmClosest.userData.inPalm = false;
-                  palmClosest.userData.opened = false;
-                  palmClosest.userData.scaleTarget = 1;
-                  palmClosest.userData.restPos.copy(palmClosest.userData.basePos);
-                  palmClosest.visible = true;
-                  if (openedBubble === palmClosest) openedBubble = null;
-                  palmBubbles.splice(palmIdx, 1);
-                  palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
+                if (closest) {
+                  closest.userData.inPalm = true;
+                  closest.userData.grabbed = false;
+                  closest.userData.scaleTarget = 0.5;
+                  closest.userData.palmOrbitIndex = palmBubbles.length;
+                  closest.visible = true;
+                  palmBubbles.push(closest);
+                  markBubbleOpened(closest);
                 } else {
-                  // Free bubble → add to context
-                  let closest = null, closestDist = 0.12;
-                  fileBubbles.forEach(b => {
-                    if (b.userData.inPalm) return;
+                  // 2. No free bubble nearby → check palm bubbles (remove from context)
+                  let palmClosest = null, palmDist = 0.08, palmIdx = -1;
+                  palmBubbles.forEach((b, pi) => {
                     const d = pinchResult.pinchPoint.distanceTo(b.position);
-                    if (d < closestDist) { closestDist = d; closest = b; }
+                    if (d < palmDist) { palmDist = d; palmClosest = b; palmIdx = pi; }
                   });
-                  if (closest) {
-                    closest.userData.inPalm = true;
-                    closest.userData.grabbed = false;
-                    closest.userData.scaleTarget = 0.5;
-                    closest.userData.palmOrbitIndex = palmBubbles.length;
-                    closest.visible = true;
-                    palmBubbles.push(closest);
-                    markBubbleOpened(closest);
+                  if (palmClosest) {
+                    palmClosest.userData.inPalm = false;
+                    palmClosest.userData.opened = false;
+                    palmClosest.userData.scaleTarget = 1;
+                    palmClosest.userData.restPos.copy(palmClosest.userData.basePos);
+                    palmClosest.visible = true;
+                    if (openedBubble === palmClosest) openedBubble = null;
+                    palmBubbles.splice(palmIdx, 1);
+                    palmBubbles.forEach((b, pi) => { b.userData.palmOrbitIndex = pi; });
                   }
                 }
               }
@@ -1039,15 +1043,11 @@ renderer.setAnimationLoop((timestamp, frame) => {
                 });
                 if (freeClosest) {
                   openFileBubble(freeClosest);
+                  _backSwipeActive = false;
                 } else {
-                  // Empty space → go back one folder
-                  const parts = currentPath.split('/').filter(Boolean);
-                  if (parts.length > 1) {
-                    parts.pop();
-                    loadFiles(parts.join('/'));
-                  } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
-                    loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
-                  }
+                  // Empty space → start swipe tracking (go back only after 7 cm movement)
+                  _backSwipeActive = true;
+                  _backSwipeStart.copy(pinchResult.pinchPoint);
                 }
               }
             }
@@ -1057,6 +1057,19 @@ renderer.setAnimationLoop((timestamp, frame) => {
               state.dragging = false;
               borderMat.opacity = 0.3;
               titleMat.color.set(0x3a3a5c);
+            }
+            // Go back only if swipe was long enough (≥ 7 cm)
+            if (_backSwipeActive) {
+              _backSwipeActive = false;
+              if (pinchResult.pinchPoint && pinchResult.pinchPoint.distanceTo(_backSwipeStart) >= 0.07) {
+                const parts = currentPath.split('/').filter(Boolean);
+                if (parts.length > 1) {
+                  parts.pop();
+                  loadFiles(parts.join('/'));
+                } else if (currentPath !== 'Mistral_AI_Hackathon_2026_Paris_Vibe_AR') {
+                  loadFiles('Mistral_AI_Hackathon_2026_Paris_Vibe_AR');
+                }
+              }
             }
           }
 
@@ -1085,7 +1098,7 @@ renderer.setAnimationLoop((timestamp, frame) => {
       // Orbit around left palm — slow, peaceful
       const total = Math.max(palmBubbles.length, 1);
       const orbitR = 0.07 + total * 0.018;
-      const speed = 1.5 + d.palmOrbitIndex * 0.3;
+      const speed = 1.5; // constant speed regardless of how many bubbles are in palm
       const angle = elapsed * speed + (d.palmOrbitIndex / total) * Math.PI * 2;
       const tiltAngle = d.palmOrbitIndex * 0.6;
 
