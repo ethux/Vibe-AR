@@ -1,6 +1,7 @@
 // ─── Scene — Three.js setup, controllers, hand tracking, render loop ───
 import {
   getRenderer, setRenderer, getTermWs, WIN_W, WIN_H,
+  getProjectState, setProjectState,
 } from './state.js';
 import { log } from './logging.js';
 import { renderTermToCanvas, termRenderCanvas } from './terminal.js';
@@ -16,18 +17,39 @@ import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
 import { LivePreviewManager } from './live-preview.js';
+import { HandRenderer } from './HandRenderer.js';
 import { initSceneControl } from './scene-control.js';
+import { StreamScreenWindow } from './StreamScreenWindow.js';
+import { FileViewerWindow } from './FileViewerWindow.js';
 
 let scene, camera, clock;
-let wm, termWin, kbBtnMesh, micBtnMesh;
+let wm, termWin, kbBtnMesh, micBtnMesh, expBtnMesh;
 let animMgr;  // mascot animation manager
 let codeCity;  // 3D code visualization
 let bubbleMgr; // file bubble browser
 let gitTree;   // 3D git history tree
 let livePreview; // dev server preview manager
+let handRenderer; // 3D glove hand models
+let streamScreen; // live Mac screen stream
+let fileViewer;   // code/image file viewer
 
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
+
+export function toggleExplorer() {
+  const state = getProjectState();
+  if (!state.explorerOpen) {
+    // Opening explorer: fade windows, show bubbles
+    setProjectState('explorerOpen', true);
+    wm.fadeAllWindows(0.3, 0.92);
+    bubbleMgr.show();
+  } else {
+    // Closing explorer: hide bubbles, restore windows
+    setProjectState('explorerOpen', false);
+    bubbleMgr.hide();
+    wm.unfadeAllWindows();
+  }
+}
 
 export function initScene() {
   scene = new THREE.Scene();
@@ -77,14 +99,17 @@ export function initScene() {
   // ── Live Preview (dev server detection) ──
   livePreview = new LivePreviewManager(scene, wm);
 
-  // ── Live Preview: feed terminal output for server detection ──
-  addTermOutputListener((text) => {
-    const result = livePreview.detectServer(text);
-    if (result.detected) livePreview.openPreview(result.port, result.framework);
-  });
+  // ── Hand Renderer (3D glove models) ──
+  handRenderer = new HandRenderer(scene);
+
+  // ── Stream Screen Window (Mac screen capture) ──
+  streamScreen = new StreamScreenWindow(wm);
+
+  // ── File Viewer (code editor / image preview) ──
+  fileViewer = new FileViewerWindow(wm);
 
   // ── Scene Control (MCP WebSocket bridge) ──
-  initSceneControl({ gitTree, bubbleMgr, codeCity, wm });
+  initSceneControl({ gitTree, bubbleMgr, codeCity, wm, streamScreen, livePreview, fileViewer, toggleExplorer });
 
   // ── KB + MIC buttons on the title bar ──
   const titleY = termWin.getTitleBarYOffset();
@@ -107,6 +132,15 @@ export function initScene() {
   micBtnMesh.position.set(WIN_W / 2 - 0.115, titleY, 0.004);
   termWin.root.add(micBtnMesh);
   setMicBtnMesh(micBtnMesh);
+
+  const expBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
+  const expBtnMat = new THREE.MeshBasicMaterial({
+    map: makeTextTexture('EXP', 22, '#61dafb', '#C0C0C0', 96, 40),
+    transparent: true, depthWrite: true,
+  });
+  expBtnMesh = new THREE.Mesh(expBtnGeo, expBtnMat);
+  expBtnMesh.position.set(WIN_W / 2 - 0.185, titleY, 0.004);
+  termWin.root.add(expBtnMesh);
 
   // ── 3D keyboard attached to terminal window ──
   build3DKeyboard(termWin.root);
@@ -145,6 +179,11 @@ export function initScene() {
       const kbHits = raycaster.intersectObject(kbBtnMesh);
       if (kbHits.length) { toggleKb3D(); return; }
     }
+    // EXP button
+    if (expBtnMesh) {
+      const expHits = raycaster.intersectObject(expBtnMesh);
+      if (expHits.length) { toggleExplorer(); return; }
+    }
     // 3D keyboard keys
     if (isKbVisible()) {
       const kbKeyMeshes = getKbKeyMeshes();
@@ -154,6 +193,19 @@ export function initScene() {
         if (keyHits.length) {
           const hit = kbKeyMeshes.find(k => k.mesh === keyHits[0].object);
           if (hit) { handleKbKeyPress(hit.char); return; }
+        }
+      }
+    }
+    // Bubbles via controller ray (same ray as window cursor)
+    if (bubbleMgr.isVisible()) {
+      const spheres = bubbleMgr.fileBubbles
+        .filter(b => !b.userData.inPalm && b.userData.sphere)
+        .map(b => b.userData.sphere);
+      if (spheres.length) {
+        const hits = raycaster.intersectObjects(spheres, false);
+        if (hits.length) {
+          const bubble = bubbleMgr.fileBubbles.find(b => b.userData.sphere === hits[0].object);
+          if (bubble) { bubbleMgr.openBubble(bubble); return; }
         }
       }
     }
@@ -189,6 +241,12 @@ export function initScene() {
   let _backSwipeActive = false;
   const _backSwipeStart = new THREE.Vector3();
 
+  // Left fist double-close → navigate back
+  let _leftFistWas = false;
+  let _leftFistCount = 0;
+  let _leftFistLastTime = 0;
+  const LEFT_FIST_WINDOW = 900; // ms between two fists
+
   // Fist rotation state (right hand) — physics-based with momentum
   let _fistRotating = false;
   let _fistLastX    = 0;
@@ -208,7 +266,7 @@ export function initScene() {
   // ── Hand laser pointer (right hand index finger → distant bubble targeting) ──
   const _laserGeo = new THREE.BufferGeometry();
   _laserGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,0,-2.5], 3));
-  const _laserMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.55, depthTest: false });
+  const _laserMat = new THREE.LineBasicMaterial({ color: 0xFF7000, transparent: true, opacity: 0.55, depthTest: false });
   const _laserLine = new THREE.Line(_laserGeo, _laserMat);
   _laserLine.visible = false;
   _laserLine.renderOrder = 999;
@@ -252,6 +310,10 @@ export function initScene() {
                 const bw = new THREE.Vector3(); kbBtnMesh.getWorldPosition(bw);
                 if (p.pinchPoint.distanceTo(bw) < 0.06) { toggleKb3D(); continue; }
               }
+              if (expBtnMesh) {
+                const ew = new THREE.Vector3(); expBtnMesh.getWorldPosition(ew);
+                if (p.pinchPoint.distanceTo(ew) < 0.06) { toggleExplorer(); continue; }
+              }
               if (isKbVisible()) {
                 const kbKeyMeshes = getKbKeyMeshes();
                 let hitKey = false;
@@ -270,13 +332,20 @@ export function initScene() {
                 tmpRay.ray.direction.set(0, 0, -1);
                 if (gitTree.handleRaycast(tmpRay)) continue;
               }
-              // Check file bubbles — left/right distinction
+              // Left hand: palm context — only when it's a real pinch, not a full fist
               if (src.handedness === 'left') {
-                if (bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
-              } else {
-                // Right hand: grab-drag — laser target first, then proximity, then camera ray
-                let grabbed = _laserTargetBubble
-                  || bubbleMgr.findClosestFreeBubble(p.pinchPoint);
+                const leftFist = detectFist(src, frame, ref);
+                if (!leftFist.fisting && bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
+              } else if (bubbleMgr.isVisible()) {
+                // Right hand laser target → click to open immediately (folder nav or file view)
+                if (_laserTargetBubble) {
+                  bubbleMgr.openBubble(_laserTargetBubble);
+                  _laserTargetBubble = null;
+                  _backSwipeActive = false;
+                  continue;
+                }
+                // Right hand proximity grab-drag (no laser, hand is close to a bubble)
+                let grabbed = bubbleMgr.findClosestFreeBubble(p.pinchPoint);
                 if (!grabbed) {
                   const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
                   const camPos = new THREE.Vector3();
@@ -396,6 +465,23 @@ export function initScene() {
             prevGrabState[handIdx] = true;
             if (fistResult.wristPos) codeCity.onGrabStart(handIdx, fistResult.wristPos);
             if (src.handedness === 'right') { _fistRotating = true; _fistLastX = fistResult.wristPos?.x ?? 0; }
+            // Right fist double-close → navigate back
+            if (src.handedness === 'right') {
+              const now2 = performance.now();
+              if (!_leftFistWas) {
+                if (now2 - _leftFistLastTime < LEFT_FIST_WINDOW) {
+                  _leftFistCount++;
+                } else {
+                  _leftFistCount = 1;
+                }
+                _leftFistLastTime = now2;
+                _leftFistWas = true;
+                if (_leftFistCount >= 2) {
+                  _leftFistCount = 0;
+                  bubbleMgr.navigateBack();
+                }
+              }
+            }
           } else if (fistResult.fisting && prevGrabState[handIdx]) {
             if (fistResult.wristPos) codeCity.onGrabMove(handIdx, fistResult.wristPos);
             if (src.handedness === 'right' && _fistRotating && fistResult.wristPos) {
@@ -409,24 +495,25 @@ export function initScene() {
             prevGrabState[handIdx] = false;
             codeCity.onGrabEnd(handIdx);
             if (src.handedness === 'right') _fistRotating = false;
+            if (src.handedness === 'right') _leftFistWas = false;
             // Velocity persists — momentum continues after fist release
           }
 
-          // Track right hand for CodeCity tooltips
-          if (handedness === 'right') {
-            const wristPos = getJointPos(src, 'wrist', frame, ref);
-            if (wristPos) codeCity._rightHandPos = wristPos;
+          // Track index finger tips for CodeCity touch detection
+          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+          if (indexTip) {
+            if (!codeCity._fingerTips) codeCity._fingerTips = [];
+            codeCity._fingerTips[handIdx] = { pos: indexTip, handedness: handedness };
           }
 
           // Hand hover
-          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
           wm.updateHandHover(handIdx, indexTip);
 
           // ── Right hand laser pointer (only when not pinching, not doing voice, not dragging) ──
           if (handedness === 'right') {
             const isVoiceActive = handAnimState[handIdx].wasOpen;
             const showLaser = !s.pinching && !isVoiceActive && !_draggedBubble && indexTip;
-            if (showLaser) {
+            if (showLaser && bubbleMgr.isVisible()) {
               const indexProx = getJointPos(src, 'index-finger-phalanx-proximal', frame, ref);
               const laserDir = indexProx
                 ? indexTip.clone().sub(indexProx).normalize()
@@ -438,8 +525,8 @@ export function initScene() {
               pos.setXYZ(0, indexTip.x, indexTip.y, indexTip.z);
               pos.setXYZ(1, endPt.x, endPt.y, endPt.z);
               pos.needsUpdate = true;
-              _laserMat.color.setHex(hit ? 0xffffff : 0x00ffff);
-              _laserMat.opacity = hit ? 0.85 : 0.45;
+              _laserMat.color.setHex(hit ? 0xffb347 : 0xFF7000);
+              _laserMat.opacity = hit ? 0.95 : 0.45;
               if (hit) hit.userData.scaleTarget = Math.max(hit.userData.scaleTarget || 1, 1.1);
               _laserLine.visible = true;
             } else {
@@ -453,23 +540,31 @@ export function initScene() {
 
     // ── Fist rotation physics — apply once per frame outside inputSources loop ──
     if (!_fistRotating) _rotVelocity *= ROT_FRICTION;  // coast + decelerate when released
-    if (Math.abs(_rotVelocity) > ROT_STOP) {
+    if (Math.abs(_rotVelocity) > ROT_STOP && bubbleMgr.isVisible()) {
       bubbleMgr.rotateBubbles(_rotVelocity);
     } else {
       _rotVelocity = 0;  // snap to rest
     }
 
-    // WindowManager update (hover, drag, resize animations)
-    wm.update(frame, dt, elapsed, [ctrl0, ctrl1]);
-
-    // Update mascot animations (billboarding, redraw canvas)
+    // WindowManager update (hover, drag, resize animations, billboarding)
     const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    wm.update(frame, dt, elapsed, [ctrl0, ctrl1], xrCamera);
     animMgr.update(dt, elapsed, xrCamera);
 
-    // Update CodeCity (matrix rain, hover tooltips)
+    // Update CodeCity (matrix rain, finger-touch tooltips)
     codeCity.updateMatrix(dt);
-    if (renderer.xr.isPresenting) {
-      codeCity.updateHover([ctrl0, ctrl1]);
+    if (renderer.xr.isPresenting && codeCity._fingerTips) {
+      codeCity.updateHover(codeCity._fingerTips);
+    }
+
+    // Update 3D hand glove models
+    if (frame && renderer.xr.isPresenting) {
+      const sess = renderer.xr.getSession();
+      const ref = renderer.xr.getReferenceSpace();
+      if (sess && ref) {
+        const handSources = [...sess.inputSources].filter(s => s.hand);
+        handRenderer.update(frame, ref, handSources);
+      }
     }
 
     // Update file bubbles (bobbing animation)
@@ -539,6 +634,10 @@ export function initScene() {
       const hits = mouseRaycaster.intersectObject(kbBtnMesh);
       if (hits.length) { toggleKb3D(); return; }
     }
+    if (expBtnMesh) {
+      const hits = mouseRaycaster.intersectObject(expBtnMesh);
+      if (hits.length) { toggleExplorer(); return; }
+    }
     if (isKbVisible()) {
       const kbKeyMeshes = getKbKeyMeshes();
       if (kbKeyMeshes.length) {
@@ -552,8 +651,8 @@ export function initScene() {
     }
     // Git tree commits
     if (gitTree.handleRaycast(mouseRaycaster)) return;
-    // File bubbles
-    if (bubbleMgr.handleRaycast(mouseRaycaster)) return;
+    // File bubbles (only when explorer is visible)
+    if (bubbleMgr.isVisible() && bubbleMgr.handleRaycast(mouseRaycaster)) return;
   });
 
   window.addEventListener('resize', () => {
