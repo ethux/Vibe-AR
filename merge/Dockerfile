@@ -43,9 +43,12 @@ RUN npm install -g \
 # Copy MCP server into container
 COPY mcp-server /opt/mcp-server
 
+# Copy custom system prompt for AR-aware agent
+COPY workspace/.vibe/prompts /root/.vibe/prompts
+
 # Configure Vibe global config at ~/.vibe (survives volume mounts)
 RUN mkdir -p /root/.vibe && \
-    printf '[[providers]]\nname = "mistral"\napi_base = "http://web:3001/mistral-proxy/v1"\napi_key_env_var = "MISTRAL_API_KEY"\nbackend = "generic"\n\n[[mcp_servers]]\nname = "vibe_ar"\ntransport = "stdio"\ncommand = "python"\nargs = ["/opt/mcp-server/server.py"]\nenv = { "VIBE_WEB_URL" = "http://web:3001", "VIBE_WORKSPACE" = "/workspace" }\nstartup_timeout_sec = 10\ntool_timeout_sec = 30\n' > /root/.vibe/config.toml
+    printf 'system_prompt_id = "vibe-ar"\nactive_model = "mistral-large-latest"\n\n[[providers]]\nname = "mistral"\napi_base = "http://web:3001/mistral-proxy/v1"\napi_key_env_var = "MISTRAL_API_KEY"\nbackend = "generic"\n\n[[models]]\nname = "mistral-large-latest"\nprovider = "mistral"\nalias = "mistral-large-latest"\ntemperature = 0.15\n\n[[mcp_servers]]\nname = "vibe_ar"\ntransport = "stdio"\ncommand = "python"\nargs = ["/opt/mcp-server/server.py"]\nenv = { "VIBE_WEB_URL" = "http://web:3001", "VIBE_WORKSPACE" = "/workspace" }\nstartup_timeout_sec = 10\ntool_timeout_sec = 30\n' > /root/.vibe/config.toml
 
 # Pre-trust /workspace so Vibe reads local .vibe/config.toml too
 RUN mkdir -p /root/.vibe && \
@@ -58,7 +61,7 @@ ENV VIBE_HOME=/root/.vibe
 WORKDIR /workspace
 
 # Entrypoint: copy config to workspace .vibe/ on startup (volume mount overwrites build-time files)
-RUN printf '#!/bin/sh\nmkdir -p /workspace/.vibe\ncp -n /root/.vibe/config.toml /workspace/.vibe/config.toml 2>/dev/null || true\nexec "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN printf '#!/bin/sh\nmkdir -p /workspace/.vibe/prompts\ncp -n /root/.vibe/config.toml /workspace/.vibe/config.toml 2>/dev/null || true\ncp -rn /root/.vibe/prompts/ /workspace/.vibe/prompts/ 2>/dev/null || true\nexec "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
 # ttyd serves on 7681 by default

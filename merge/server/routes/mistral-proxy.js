@@ -44,6 +44,19 @@ function extractSentences(buffer) {
   return { sentences, remainder: buffer.slice(lastIndex) };
 }
 
+// Extract only content within <speak> tags for TTS.
+// Returns the spoken text; everything outside <speak> tags is ignored.
+function extractSpeakContent(text) {
+  const matches = [];
+  const regex = /<speak>([\s\S]*?)<\/speak>/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const content = match[1].trim();
+    if (content.length > 0) matches.push(content);
+  }
+  return matches.join(' ');
+}
+
 // Clean text for speech (remove code blocks, markdown, etc.)
 function cleanForSpeech(text) {
   return text
@@ -104,7 +117,7 @@ router.all('/mistral-proxy/*', async (req, res) => {
       responseChunks = { chunks: [], done: false, ts: Date.now() };
 
       let accumulated = '';
-      let sentenceBuffer = '';
+      let speakBuffer = '';  // Accumulates text to detect <speak> tags
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
 
@@ -124,19 +137,33 @@ router.all('/mistral-proxy/*', async (req, res) => {
               const delta = parsed.choices?.[0]?.delta?.content;
               if (delta) {
                 accumulated += delta;
-                sentenceBuffer += delta;
+                speakBuffer += delta;
 
-                // Check for complete sentences
-                const cleaned = cleanForSpeech(sentenceBuffer);
-                const { sentences, remainder } = extractSentences(cleaned);
-                if (sentences.length > 0) {
-                  sentenceBuffer = remainder;
+                // Extract completed <speak>...</speak> blocks as they stream in
+                const speakRegex = /<speak>([\s\S]*?)<\/speak>/gi;
+                let speakMatch;
+                let lastSpeakEnd = 0;
+                while ((speakMatch = speakRegex.exec(speakBuffer)) !== null) {
+                  const spokenText = cleanForSpeech(speakMatch[1].trim());
+                  lastSpeakEnd = speakRegex.lastIndex;
+
+                  // Split spoken text into sentences for streaming TTS
+                  const { sentences, remainder } = extractSentences(spokenText);
                   for (const sentence of sentences) {
                     if (sentence.length >= 3) {
-                      console.log(`[PROXY] Chunk ${responseChunks.chunks.length}: "${sentence.substring(0, 80)}"`);
+                      console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${sentence.substring(0, 80)}"`);
                       responseChunks.chunks.push(sentence);
                     }
                   }
+                  // If there's leftover text that didn't end in punctuation, push it too
+                  if (remainder.trim().length >= 3) {
+                    console.log(`[PROXY] Speak chunk ${responseChunks.chunks.length}: "${remainder.trim().substring(0, 80)}"`);
+                    responseChunks.chunks.push(remainder.trim());
+                  }
+                }
+                // Keep only unmatched tail (potential partial <speak> tag)
+                if (lastSpeakEnd > 0) {
+                  speakBuffer = speakBuffer.slice(lastSpeakEnd);
                 }
               }
             } catch {}
@@ -146,11 +173,14 @@ router.all('/mistral-proxy/*', async (req, res) => {
         console.error('[PROXY] Stream error:', e.message);
       }
 
-      // Flush remaining text as final chunk
-      const finalCleaned = cleanForSpeech(sentenceBuffer);
-      if (finalCleaned.length >= 3) {
-        console.log(`[PROXY] Final chunk: "${finalCleaned.substring(0, 80)}"`);
-        responseChunks.chunks.push(finalCleaned);
+      // Flush any remaining <speak> content
+      const finalSpoken = extractSpeakContent(speakBuffer);
+      if (finalSpoken.length >= 3) {
+        const cleaned = cleanForSpeech(finalSpoken);
+        if (cleaned.length >= 3) {
+          console.log(`[PROXY] Final speak chunk: "${cleaned.substring(0, 80)}"`);
+          responseChunks.chunks.push(cleaned);
+        }
       }
       responseChunks.done = true;
 
@@ -169,13 +199,17 @@ router.all('/mistral-proxy/*', async (req, res) => {
         console.log(`[PROXY] Captured ${content.length} chars`);
 
         responseChunks = { chunks: [], done: false, ts: Date.now() };
-        const cleaned = cleanForSpeech(content);
-        const { sentences, remainder } = extractSentences(cleaned);
-        for (const s of sentences) {
-          if (s.length >= 3) responseChunks.chunks.push(s);
-        }
-        if (remainder.trim().length >= 3) {
-          responseChunks.chunks.push(remainder.trim());
+        // Only speak content within <speak> tags
+        const spokenText = extractSpeakContent(content);
+        if (spokenText.length >= 3) {
+          const cleaned = cleanForSpeech(spokenText);
+          const { sentences, remainder } = extractSentences(cleaned);
+          for (const s of sentences) {
+            if (s.length >= 3) responseChunks.chunks.push(s);
+          }
+          if (remainder.trim().length >= 3) {
+            responseChunks.chunks.push(remainder.trim());
+          }
         }
         responseChunks.done = true;
       }
