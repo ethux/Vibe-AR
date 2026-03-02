@@ -6,8 +6,9 @@ import { log } from './logging.js';
 import { renderTermToCanvas, termRenderCanvas } from './terminal.js';
 import { WindowManager } from './WindowManager.js';
 import { build3DKeyboard, toggleKb3D, handleKbKeyPress, getKbKeyMeshes, isKbVisible } from './keyboard3d.js';
-import { toggleMicFromBtn, setMicBtnMesh } from './voice.js';
+import { toggleMicFromBtn, setMicBtnMesh, startRecording, stopRecording, getIsRecording } from './voice.js';
 import { makeTextTexture } from './textures.js';
+import { stopTTS, isTtsSpeaking } from './tts.js';
 
 let scene, camera, clock;
 let wm, termWin, kbBtnMesh, micBtnMesh;
@@ -132,9 +133,12 @@ export function initScene() {
 
   // ── Hand tracking ──
   const hs = [
-    { pinching: false },
-    { pinching: false },
+    { pinching: false, handOpen: false, handClosed: false, lastGestureTime: 0 },
+    { pinching: false, handOpen: false, handClosed: false, lastGestureTime: 0 },
   ];
+
+  // Gesture cooldown to prevent rapid toggling (ms)
+  const GESTURE_COOLDOWN = 800;
 
   function jointPos(src, name, frame, ref) {
     const j = src.hand.get(name);
@@ -150,6 +154,54 @@ export function initScene() {
     const i = jointPos(src, 'index-finger-tip', frame, ref);
     if (!t || !i) return { ok: false, pt: null };
     return { ok: t.distanceTo(i) < 0.025, pt: t.clone().lerp(i, 0.5) };
+  }
+
+  /**
+   * Detect hand open/close gesture.
+   * Open hand  = all 4 finger tips are far from the wrist (fingers extended)
+   * Closed hand = all 4 finger tips are close to the wrist (fist)
+   */
+  function detectHandOpenClose(src, frame, ref) {
+    const wrist = jointPos(src, 'wrist', frame, ref);
+    if (!wrist) return 'unknown';
+
+    const fingerTips = [
+      'index-finger-tip',
+      'middle-finger-tip',
+      'ring-finger-tip',
+      'pinky-finger-tip',
+    ];
+    const fingerMCPs = [
+      'index-finger-metacarpal',
+      'middle-finger-metacarpal',
+      'ring-finger-metacarpal',
+      'pinky-finger-metacarpal',
+    ];
+
+    let extendedCount = 0;
+    let curledCount = 0;
+
+    for (let i = 0; i < fingerTips.length; i++) {
+      const tip = jointPos(src, fingerTips[i], frame, ref);
+      const mcp = jointPos(src, fingerMCPs[i], frame, ref);
+      if (!tip || !mcp) continue;
+
+      const tipDist = tip.distanceTo(wrist);
+      const mcpDist = mcp.distanceTo(wrist);
+
+      // If finger tip is farther than MCP from wrist, finger is extended
+      if (tipDist > mcpDist * 1.3) {
+        extendedCount++;
+      }
+      // If finger tip is closer to wrist than MCP, finger is curled
+      else if (tipDist < mcpDist * 0.9) {
+        curledCount++;
+      }
+    }
+
+    if (extendedCount >= 3) return 'open';
+    if (curledCount >= 3) return 'closed';
+    return 'partial';
   }
 
   // ── Render loop ──
@@ -208,6 +260,40 @@ export function initScene() {
           } else if (!p.ok && s.pinching) {
             s.pinching = false;
             wm.onPinchEnd(handIdx);
+          }
+
+          // ── Hand open/close gesture for voice control ──
+          const now = performance.now();
+          const gesture = detectHandOpenClose(src, frame, ref);
+
+          if (gesture === 'open' && !s.handOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            s.handOpen = true;
+            s.handClosed = false;
+            s.lastGestureTime = now;
+
+            // Open hand → start recording if not already recording
+            if (!getIsRecording()) {
+              log(`[HAND] ${src.handedness} hand OPENED — starting recording`);
+              startRecording();
+            }
+          } else if (gesture === 'closed' && !s.handClosed && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            s.handClosed = true;
+            s.handOpen = false;
+            s.lastGestureTime = now;
+
+            if (getIsRecording()) {
+              // Close hand while recording → stop recording (sends to transcribe + chat)
+              log(`[HAND] ${src.handedness} hand CLOSED — stopping recording`);
+              stopRecording();
+            } else if (isTtsSpeaking()) {
+              // Close hand while TTS is speaking → stop TTS
+              log(`[HAND] ${src.handedness} hand CLOSED — stopping TTS`);
+              stopTTS();
+            }
+          } else if (gesture === 'partial') {
+            // Reset so next open/close is detected
+            s.handOpen = false;
+            s.handClosed = false;
           }
 
           // Hand hover
