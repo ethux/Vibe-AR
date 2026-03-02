@@ -362,10 +362,10 @@ export function initScene() {
               if (getIsRecording()) {
                 log(`[HAND] right palm CLOSED — stopping recording`);
                 stopRecording();
-              } else if (isTtsSpeaking()) {
-                log(`[HAND] right palm CLOSED — stopping TTS`);
-                stopTTS();
               }
+              // Always kill TTS on palm close (cancels polling + playback)
+              log(`[HAND] right palm CLOSED — stopping TTS`);
+              stopTTS();
             }
 
             anim.wasOpen = s.palmOpen;

@@ -3,16 +3,17 @@
 import { log } from './logging.js';
 
 let ttsSpeaking = false;
+let ttsCancelled = false;  // kill switch — stops polling + playback
 let lastSeenTs = 0;  // timestamp of last response we already spoke
 let currentAudioCtx = null;  // track active AudioContext for stop
 let currentReader = null;    // track active stream reader for stop
 
 export function isTtsSpeaking() { return ttsSpeaking; }
 
-/** Immediately stop any TTS playback */
+/** Immediately stop any TTS — works during polling AND playback */
 export function stopTTS() {
-  if (!ttsSpeaking) return;
-  log('[TTS] Stopping playback (hand gesture)');
+  log('[TTS] STOP requested (hand gesture)');
+  ttsCancelled = true;  // kills the polling loop in speakReply()
   if (currentReader) {
     try { currentReader.cancel(); } catch (_) {}
     currentReader = null;
@@ -30,12 +31,15 @@ export function stopTTS() {
  */
 export async function speakReply() {
   if (ttsSpeaking) { log('[TTS] Already speaking, skip'); return; }
+  ttsCancelled = false;  // reset kill switch for this new cycle
   const startTs = Date.now();
   log('[TTS] Waiting for Vibe response via proxy...');
 
   // Poll for up to 30s, checking every 2s
   for (let i = 0; i < 15; i++) {
+    if (ttsCancelled) { log('[TTS] Cancelled during polling'); return; }
     await new Promise(r => setTimeout(r, 2000));
+    if (ttsCancelled) { log('[TTS] Cancelled during polling'); return; }
     try {
       const res = await fetch('/api/latest-response');
       const data = await res.json();
@@ -88,7 +92,7 @@ const PCM_RATE = 24000;
 const PCM_CHUNK_SAMPLES = 4800;
 
 async function speakTTS(text) {
-  if (ttsSpeaking) return;
+  if (ttsSpeaking || ttsCancelled) return;
   ttsSpeaking = true;
   try {
     const res = await fetch('/api/tts', {
