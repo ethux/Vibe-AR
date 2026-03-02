@@ -6,6 +6,7 @@
 // ─── Pixel Art Utilities ─────────────────────────────────────────
 
 const PixelArt = {
+  // Windows 95 palette with Mistral orange accents
   ORANGE_LIGHT:  '#FFB347',
   ORANGE:        '#F97316',
   ORANGE_DARK:   '#C2410C',
@@ -13,6 +14,11 @@ const PixelArt = {
   BLACK:         '#000000',
   DARK_BG:       '#0A0A0A',
   BORDER_BG:     '#111111',
+  WHITE:         '#FFFFFF',
+  SILVER:        '#C0C0C0',   // Window frame / button face
+  DARK_GRAY:     '#808080',   // 3D bevel shadow (inner)
+  SHADOW:        '#404040',   // 3D bevel shadow (outer)
+  BTN_FACE:      '#C0C0C0',
 
   drawPixel(ctx, px, py, pixelSize, color) {
     ctx.fillStyle = color;
@@ -31,7 +37,7 @@ const PixelArt = {
   },
 
   fillSolidBorder(ctx, x, y, w, h, color) {
-    ctx.fillStyle = color || this.ORANGE;
+    ctx.fillStyle = color || this.SILVER;
     ctx.fillRect(x, y, w, h);
   },
 
@@ -290,41 +296,81 @@ class ManagedWindow {
   _drawTitleCanvas() {
     const ctx = this._titleCtx, w = this._titleCanvas.width, h = this._titleCanvas.height;
     const ps = 3;
-    ctx.fillStyle = '#0A0A0A';
+    // Mistral orange gradient title bar (Win95 layout)
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, '#E65100');  // deep Mistral orange
+    grad.addColorStop(1, '#FF7000'); // Mistral orange
+    ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = PixelArt.ORANGE;
-    ctx.fillRect(0, 0, w, ps);
-    const textW = PixelArt.measurePixelText(this.title, ps);
-    const textX = (w - textW) / 2;
-    const textY = (h - 7 * ps) / 2 + ps;
-    PixelArt.drawPixelText(ctx, this.title, textX, textY, ps, PixelArt.ORANGE_LIGHT);
+    // Pixel title text (white, left-aligned with padding)
+    const textY = (h - 7 * ps) / 2 + 2;
+    PixelArt.drawPixelText(ctx, this.title, 8, textY, ps, '#FFFFFF');
+    // Win95-style title bar buttons (minimize, maximize, close)
+    const btnSize = 20, btnY = (h - btnSize) / 2, btnGap = 4;
+    const closeX = w - btnSize - 6;
+    const maxX = closeX - btnSize - btnGap;
+    const minX = maxX - btnSize - btnGap;
+    // Draw raised 3D button (silver Win95 style)
+    const drawBtn = (bx, by) => {
+      ctx.fillStyle = '#C0C0C0';
+      ctx.fillRect(bx, by, btnSize, btnSize);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(bx, by, btnSize, 2);
+      ctx.fillRect(bx, by, 2, btnSize);
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(bx, by + btnSize - 2, btnSize, 2);
+      ctx.fillRect(bx + btnSize - 2, by, 2, btnSize);
+    };
+    // Minimize button (underscore)
+    drawBtn(minX, btnY);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(minX + 4, btnY + btnSize - 6, btnSize - 8, 2);
+    // Maximize button (square)
+    drawBtn(maxX, btnY);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(maxX + 4, btnY + 4, btnSize - 8, 2);
+    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1;
+    ctx.strokeRect(maxX + 4, btnY + 4, btnSize - 8, btnSize - 8);
+    // Close button (X)
+    drawBtn(closeX, btnY);
+    ctx.fillStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(closeX + 5, btnY + 5);
+    ctx.lineTo(closeX + btnSize - 5, btnY + btnSize - 5);
+    ctx.moveTo(closeX + btnSize - 5, btnY + 5);
+    ctx.lineTo(closeX + 5, btnY + btnSize - 5);
+    ctx.stroke();
     if (this._titleTex) this._titleTex.needsUpdate = true;
   }
 
   _buildBorders(W, H, border, titleH, bottomH) {
     const sideH = this._contentH;
     this._borderMeshes = {};
-    const makeBorderMat = () => new THREE.MeshBasicMaterial({
-      color: 0xF97316, transparent: true, opacity: 0.35, side: THREE.DoubleSide
-    });
+    const FRAME = 0.006;
 
-    const leftGeo = new THREE.PlaneGeometry(border, sideH);
-    this._leftBorderMat = makeBorderMat();
-    const leftMesh = new THREE.Mesh(leftGeo, this._leftBorderMat);
+    // Silver frame background (Win95 style)
+    const frameW = W + FRAME * 2, frameH = sideH + this._titleH + FRAME * 2;
+    const frameMat = new THREE.MeshBasicMaterial({ color: 0xC0C0C0, side: THREE.DoubleSide });
+    const frameMesh = new THREE.Mesh(new THREE.PlaneGeometry(frameW, frameH), frameMat);
+    frameMesh.position.set(0, this._titleH / 2 - 0.005, -0.001);
+    this.root.add(frameMesh);
+
+    // 3D highlight borders (white — top and left)
+    const highlightMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide });
+    const leftMesh = new THREE.Mesh(new THREE.PlaneGeometry(border, sideH), highlightMat);
     leftMesh.position.set(-W/2 + border/2, -0.005, 0.0005);
     this.root.add(leftMesh);
     this._borderMeshes.left = leftMesh;
 
-    const rightGeo = new THREE.PlaneGeometry(border, sideH);
-    this._rightBorderMat = makeBorderMat();
-    const rightMesh = new THREE.Mesh(rightGeo, this._rightBorderMat);
+    // 3D shadow borders (dark gray — bottom and right)
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x808080, side: THREE.DoubleSide });
+    const rightMesh = new THREE.Mesh(new THREE.PlaneGeometry(border, sideH), shadowMat);
     rightMesh.position.set(W/2 - border/2, -0.005, 0.0005);
     this.root.add(rightMesh);
     this._borderMeshes.right = rightMesh;
 
-    const botGeo = new THREE.PlaneGeometry(W, border);
-    this._botBorderMat = makeBorderMat();
-    const botMesh = new THREE.Mesh(botGeo, this._botBorderMat);
+    const botMesh = new THREE.Mesh(new THREE.PlaneGeometry(W, border), shadowMat);
     botMesh.position.set(0, -this._contentH/2 - border/2, 0.0005);
     this.root.add(botMesh);
     this._borderMeshes.bottom = botMesh;
@@ -336,16 +382,18 @@ class ManagedWindow {
     const GROUP_W = PILL_W + GAP + CLOSE_W;
     const barY = -totalContentH/2 - 0.015 - PILL_H/2 - 0.004;
 
-    // Pill drag bar
+    // Silver drag bar with 3D raised look (Win95)
     const pillCanvas = document.createElement('canvas');
     const PC_W = 48, PC_H = 6;
     pillCanvas.width = PC_W; pillCanvas.height = PC_H;
     const pctx = pillCanvas.getContext('2d');
     pctx.imageSmoothingEnabled = false;
-    pctx.fillStyle = '#ffffff';
-    pctx.fillRect(1, 0, PC_W-2, PC_H);
-    pctx.fillRect(0, 1, 1, PC_H-2);
-    pctx.fillRect(PC_W-1, 1, 1, PC_H-2);
+    pctx.fillStyle = '#C0C0C0';
+    pctx.fillRect(0, 0, PC_W, PC_H);
+    pctx.fillStyle = '#FFFFFF';
+    pctx.fillRect(0, 0, PC_W, 1);
+    pctx.fillStyle = '#808080';
+    pctx.fillRect(0, PC_H - 1, PC_W, 1);
 
     const pillTex = new THREE.CanvasTexture(pillCanvas);
     pillTex.minFilter = THREE.NearestFilter; pillTex.magFilter = THREE.NearestFilter;
@@ -358,15 +406,26 @@ class ManagedWindow {
     this.dragBarMesh.position.set(-GROUP_W/2 + PILL_W/2, barY, 0.001);
     this.root.add(this.dragBarMesh);
 
-    // Close button
+    // Silver close button with X (Win95)
     const closeCanvas = document.createElement('canvas');
-    const CC = 8;
+    const CC = 16;
     closeCanvas.width = CC; closeCanvas.height = CC;
     const cctx = closeCanvas.getContext('2d');
     cctx.imageSmoothingEnabled = false;
-    cctx.fillStyle = '#ffffff';
-    cctx.fillRect(1, 0, CC-2, CC);
-    cctx.fillRect(0, 1, CC, CC-2);
+    cctx.fillStyle = '#C0C0C0';
+    cctx.fillRect(0, 0, CC, CC);
+    cctx.fillStyle = '#FFFFFF';
+    cctx.fillRect(0, 0, CC, 2);
+    cctx.fillRect(0, 0, 2, CC);
+    cctx.fillStyle = '#808080';
+    cctx.fillRect(0, CC - 2, CC, 2);
+    cctx.fillRect(CC - 2, 0, 2, CC);
+    cctx.strokeStyle = '#000000';
+    cctx.lineWidth = 1.5;
+    cctx.beginPath();
+    cctx.moveTo(4, 4); cctx.lineTo(CC - 4, CC - 4);
+    cctx.moveTo(CC - 4, 4); cctx.lineTo(4, CC - 4);
+    cctx.stroke();
 
     const closeTex = new THREE.CanvasTexture(closeCanvas);
     closeTex.minFilter = THREE.NearestFilter; closeTex.magFilter = THREE.NearestFilter;
@@ -393,7 +452,7 @@ class ManagedWindow {
       canvas.width = C; canvas.height = C;
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#808080';
       ctx.fillRect(0, 0, C, 2);
       ctx.fillRect(0, 0, 2, C);
       return canvas;
@@ -473,7 +532,7 @@ class ManagedWindow {
     const lerpSpeed = 8;
 
     const dragHover = this.hoverTarget === 'dragBar';
-    const dragTargetOpacity = dragHover ? 0.9 : 0.35;
+    const dragTargetOpacity = dragHover ? 0.7 : 0.20;
     this._dragBarMat.opacity += (dragTargetOpacity - this._dragBarMat.opacity) * lerpSpeed * dt;
     const dragTargetScale = dragHover ? 1.15 : 1.0;
     const cs = this.dragBarMesh.scale.x;
@@ -481,7 +540,7 @@ class ManagedWindow {
 
     if (this.closable) {
       const closeHover = this.hoverTarget === 'closeBtn';
-      const closeTargetOpacity = closeHover ? 1.0 : 0.35;
+      const closeTargetOpacity = closeHover ? 0.8 : 0.20;
       this._closeBtnMat.opacity += (closeTargetOpacity - this._closeBtnMat.opacity) * lerpSpeed * dt;
       const closeTargetScale = closeHover ? 1.4 : 1.0;
       const ccs = this.closeBtnMesh.scale.x;
@@ -498,7 +557,7 @@ class ManagedWindow {
 
   _rebuildAfterResize() {
     while (this.root.children.length > 0) this.root.remove(this.root.children[0]);
-    this._build_internal(0.015, 0.04, 0.012);
+    this._build_internal(0.004, 0.04, 0.012);
   }
 
   _build_internal(border, titleH, bottomH) {
