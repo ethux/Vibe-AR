@@ -52,8 +52,8 @@ export function toggleMicFromBtn() {
 function updateMicBtnVisual() {
   if (!micBtnMesh) return;
   micBtnMesh.material.map = isRecording
-    ? makeTextTexture('REC', 28, '#ffffff', '#ff2020', 128, 48)
-    : makeTextTexture('MIC', 28, '#ffffff', '#28c840', 128, 48);
+    ? makeTextTexture('REC', 22, '#ff2020', '#0c0c12', 96, 40)
+    : makeTextTexture('MIC', 22, '#28c840', '#0c0c12', 96, 40);
   micBtnMesh.material.needsUpdate = true;
 }
 
