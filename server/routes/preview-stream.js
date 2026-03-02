@@ -83,12 +83,48 @@ router.post('/api/devserver/start-stream', async (req, res) => {
 
     streamUrl = targetUrl;
 
+    // Track whether we've successfully loaded the real page
+    let navOk = false;
+    let lastRetryTime = 0;
+    const NAV_RETRY_INTERVAL = 3000; // retry navigation every 3s if page isn't loaded
+
+    // Check if initial navigation succeeded (no error page)
+    try {
+      const pageTitle = await page.title();
+      const pageUrl = page.url();
+      // Chrome error pages have specific titles/URLs
+      navOk = !pageUrl.startsWith('chrome-error://') && pageTitle !== '';
+      console.log(`[PREVIEW-STREAM] Initial page state: navOk=${navOk}, title="${pageTitle}", url=${pageUrl}`);
+    } catch {
+      navOk = false;
+    }
+
     // Start capture loop
     const interval = 1000 / FPS;
     let frameCount = 0;
     let lastLogTime = Date.now();
     captureInterval = setInterval(async () => {
       if (!page || page.isClosed()) return;
+
+      // If we haven't loaded the real page yet, retry navigation periodically
+      if (!navOk && Date.now() - lastRetryTime > NAV_RETRY_INTERVAL) {
+        lastRetryTime = Date.now();
+        try {
+          console.log(`[PREVIEW-STREAM] Retrying navigation to ${streamUrl}...`);
+          await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 5000 });
+          const pageUrl = page.url();
+          if (!pageUrl.startsWith('chrome-error://')) {
+            navOk = true;
+            console.log(`[PREVIEW-STREAM] Navigation succeeded! Page loaded: ${pageUrl}`);
+          } else {
+            console.log(`[PREVIEW-STREAM] Still on error page, will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+          }
+        } catch (e) {
+          console.log(`[PREVIEW-STREAM] Nav retry failed: ${e.message}, will retry in ${NAV_RETRY_INTERVAL / 1000}s`);
+        }
+        return; // skip screenshot this tick
+      }
+
       try {
         const screenshot = await page.screenshot({
           type: 'jpeg',
@@ -100,7 +136,7 @@ router.post('/api/devserver/start-stream', async (req, res) => {
 
         // Log every 30 seconds
         if (Date.now() - lastLogTime > 30000) {
-          console.log(`[PREVIEW-STREAM] Capture running: ${frameCount} frames, ${viewers.size} viewers, frame=${(screenshot.length / 1024).toFixed(1)}KB`);
+          console.log(`[PREVIEW-STREAM] Capture running: ${frameCount} frames, ${viewers.size} viewers, frame=${(screenshot.length / 1024).toFixed(1)}KB, navOk=${navOk}`);
           lastLogTime = Date.now();
         }
 
@@ -119,20 +155,11 @@ router.post('/api/devserver/start-stream', async (req, res) => {
         }
       } catch (e) {
         console.warn(`[PREVIEW-STREAM] Screenshot failed: ${e.message}`);
-        // Page might have navigated, try to recover
-        try {
-          if (page && !page.isClosed()) {
-            console.log(`[PREVIEW-STREAM] Attempting page recovery → ${streamUrl}`);
-            await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-            console.log('[PREVIEW-STREAM] Page recovered');
-          }
-        } catch (re) {
-          console.error(`[PREVIEW-STREAM] Recovery failed: ${re.message}`);
-        }
+        navOk = false; // trigger re-navigation
       }
     }, interval);
 
-    console.log(`[PREVIEW-STREAM] Started capture loop at ${FPS}fps for ${targetUrl}, ${viewers.size} viewer(s) waiting`);
+    console.log(`[PREVIEW-STREAM] Started capture loop at ${FPS}fps for ${targetUrl}, ${viewers.size} viewer(s) waiting, navOk=${navOk}`);
     res.json({ status: 'started', url: targetUrl });
   } catch (err) {
     console.error('[PREVIEW-STREAM] Failed to start:', err.message, err.stack);
