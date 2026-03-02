@@ -662,9 +662,9 @@ class FileBubbleManager {
         body: JSON.stringify({ path: filePath })
       });
       const data = await res.json();
-      this._showFileInWindow(filename, data.content || '// empty');
+      this._showFileInWindow(filename, data.content || '// empty', undefined, filePath);
     } catch (e) {
-      this._showFileInWindow(filename, '// could not read file\n// ' + e.message);
+      this._showFileInWindow(filename, '// could not read file\n// ' + e.message, undefined, filePath);
     }
   }
 
@@ -704,7 +704,7 @@ class FileBubbleManager {
       });
       const data = await res.json();
       const content = data.content || '// empty';
-      this._showFileInWindow(fd.name, content, pos);
+      this._showFileInWindow(fd.name, content, pos, fp);
       const ext = _ext(fd);
       if (this.codeCity && CODE_EXTS.has(ext)) {
         this.codeCity.analyzeCode(content, ext, fd.name);
@@ -714,12 +714,13 @@ class FileBubbleManager {
     }
   }
 
-  _showFileInWindow(filename, content, position) {
+  _showFileInWindow(filename, content, position, filePath) {
     // Don't close previous — allow multiple panels open (Iron Man multi-panel)
     const pos = position ? [position.x, position.y, position.z] : [0.4, 1.4, -0.7];
     const handle = this._fileViewer.open({
       filename,
       content,
+      filePath: filePath || filename,
       position: pos,
       width: 0.6,
       height: 0.45,
