@@ -5,8 +5,7 @@ import { WebSocketServer } from 'ws';
 
 const router = Router();
 
-// Only the latest AR client is active — prevents double commands on page reload
-let activeClient = null;
+// All connected AR clients — broadcast commands to all of them
 const clients = new Set();
 
 // POST /api/scene-control — MCP server sends commands here
@@ -17,9 +16,12 @@ router.post('/api/scene-control', (req, res) => {
   }
 
   let delivered = 0;
-  if (activeClient && activeClient.readyState === 1) {
-    activeClient.send(JSON.stringify(command));
-    delivered = 1;
+  const msg = JSON.stringify(command);
+  for (const ws of clients) {
+    if (ws.readyState === 1) {
+      ws.send(msg);
+      delivered++;
+    }
   }
 
   res.json({ ok: true, delivered, action: command.action });
@@ -30,17 +32,10 @@ function setupSceneControlWs(server) {
   const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (ws) => {
-    // New client takes over — close any stale previous client
-    if (activeClient && activeClient !== ws && activeClient.readyState === 1) {
-      console.log('[SCENE-CONTROL] Closing stale client');
-      activeClient.close();
-    }
-    activeClient = ws;
     clients.add(ws);
-    console.log(`[SCENE-CONTROL] Client connected (active), ${clients.size} total`);
+    console.log(`[SCENE-CONTROL] Client connected (${clients.size} total)`);
     ws.on('close', () => {
       clients.delete(ws);
-      if (activeClient === ws) activeClient = null;
       console.log(`[SCENE-CONTROL] Client disconnected (${clients.size} total)`);
     });
     ws.on('message', (data) => {

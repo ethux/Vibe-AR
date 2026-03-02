@@ -23,6 +23,24 @@ def scene_load_git_tree() -> str:
 
 
 @mcp.tool()
+def scene_toggle_git_tree() -> str:
+    """Toggle the 3D git tree visualization on/off in AR space."""
+    return json.dumps(send_scene_command("toggle_git_tree"))
+
+
+@mcp.tool()
+def scene_show_git_tree() -> str:
+    """Show the 3D git tree visualization in AR space."""
+    return json.dumps(send_scene_command("show_git_tree"))
+
+
+@mcp.tool()
+def scene_hide_git_tree() -> str:
+    """Hide the 3D git tree visualization from AR space."""
+    return json.dumps(send_scene_command("hide_git_tree"))
+
+
+@mcp.tool()
 def scene_highlight_commit(commit_hash: str, color: str = "#FF7000") -> str:
     """Highlight a specific commit in the 3D git tree. Color in hex (e.g. #FF7000 for orange, #EF4444 for red, #28c840 for green)."""
     return json.dumps(send_scene_command("highlight_commit", {
@@ -159,7 +177,70 @@ def scene_hide_window(window_id: int) -> str:
 # ── Preview controls ──
 
 @mcp.tool()
+def scene_run_and_preview(command: str, port: int = 5173) -> str:
+    """Run a dev server command in the AR terminal AND open a live preview.
+    Use this whenever you need to start a dev server and show it to the user.
+    This is the preferred tool for "run my app" / "start the server" / "show me the app".
+
+    Examples:
+      scene_run_and_preview("npm run dev", 5173)
+      scene_run_and_preview("python -m http.server 8080", 8080)
+      scene_run_and_preview("npx vite", 5173)
+      scene_run_and_preview("npm start", 3000)
+
+    command: the shell command to start the dev server.
+    port: the port the server will listen on."""
+    import logging
+
+    log = logging.getLogger("vibe_ar.preview")
+    log.info(f"[RUN+PREVIEW] command={command!r}, port={port}")
+
+    # 1. Run the command in the AR terminal
+    log.info("[RUN+PREVIEW] Sending terminal_command")
+    send_scene_command("terminal_command", {"command": command})
+
+    # 2. Tell the AR frontend to open the live preview window
+    #    (the client handles starting the capture stream itself)
+    log.info(f"[RUN+PREVIEW] Sending open_live_preview for port {port}")
+    result = send_scene_command("open_live_preview", {"port": port})
+    log.info(f"[RUN+PREVIEW] Done: {result}")
+    return json.dumps(result)
+
+
+@mcp.tool()
+def scene_open_preview(port: int = 5173) -> str:
+    """Open a live preview of a running web app in the AR scene.
+    Use when the dev server is already running and you just need to show the preview.
+
+    port: the port the dev server is running on (e.g. 5173 for Vite, 3000 for Next.js, 8080 for generic).
+    Common ports: 5173 (Vite), 8080 (generic), 8000 (Python), 4200 (Angular), 3000 (React/Next)."""
+    import logging
+
+    log = logging.getLogger("vibe_ar.preview")
+
+    # Tell the AR frontend to open the live preview window
+    # (the client handles starting the capture stream itself)
+    log.info(f"[PREVIEW-MCP] Sending open_live_preview for port {port}")
+    result = send_scene_command("open_live_preview", {"port": port})
+    log.info(f"[PREVIEW-MCP] result: {result}")
+    return json.dumps(result)
+
+
+@mcp.tool()
 def scene_refresh_preview() -> str:
     """Refresh the live web preview window.
     Reloads the page being captured so the user sees the latest changes."""
     return json.dumps(send_scene_command("refresh_preview"))
+
+
+@mcp.tool()
+def scene_close_preview() -> str:
+    """Close the live web preview window and stop the capture stream."""
+    import httpx
+    from vibe_ar.config import WEB_URL
+
+    try:
+        httpx.post(f"{WEB_URL}/api/devserver/stop-stream", timeout=5)
+    except Exception:
+        pass
+    return json.dumps({"ok": True, "action": "close_preview"})

@@ -29,17 +29,14 @@ class WindowManager {
       { dragging: false, window: null, offset: new THREE.Vector3() },
     ];
 
+    // Hand grab state (per hand index — closed fist grab)
+    this._handGrabState = [
+      { grabbing: false, window: null, point: new THREE.Vector3(), offset: new THREE.Vector3() },
+      { grabbing: false, window: null, point: new THREE.Vector3(), offset: new THREE.Vector3() },
+    ];
+
     // Two-hand pinch state (rotate + scale when both hands grab same window)
     this._twoHandAnchor = null;
-
-    // Hand GRAB state (closed fist — move/rotate/scale windows like Code City)
-    // hitOffset: winPos - ray hit point on window surface
-    // planeNormal/planeDot: define the plane the window was on at grab start
-    this._handGrabState = [
-      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3(), hitOffset: new THREE.Vector3(), planeNormal: null, planeDot: 0 },
-      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3(), hitOffset: new THREE.Vector3(), planeNormal: null, planeDot: 0 },
-    ];
-    this._grabTwoHandAnchor = null;
 
     // Ray-hovered window per controller index (updated every frame in update())
     this._rayHoveredWindow = [null, null];
@@ -644,12 +641,7 @@ class WindowManager {
       win.height = newH;
       const quat = win.root.quaternion.clone();
       while (win.root.children.length > 0) win.root.remove(win.root.children[0]);
-      const BORDER = 0.006, TITLEBAR_H = 0.035;
-      win._buildFrame(newW, newH);
-      win._buildContent(newW, newH, BORDER, TITLEBAR_H);
-      win._buildTitleBar(newW, TITLEBAR_H, BORDER);
-      win._buildBorders(newW, newH, BORDER, TITLEBAR_H);
-      win._buildResizeHandles(newW, newH, BORDER, TITLEBAR_H);
+      win._build_internal();
       win.root.quaternion.copy(quat);
     }
   }
@@ -849,6 +841,25 @@ class WindowManager {
       ft.active = false;
       ft.window = null;
       return;
+    }
+
+    // ── Finger tap on close button ──
+    const CLOSE_TAP_DIST = 0.035;  // 3.5cm — finger must be this close to close button
+    for (const win of this.windows) {
+      if (win.closed || !win.visible || !win.closable) continue;
+      const closeWorld = new THREE.Vector3();
+      win.closeBtnMesh.getWorldPosition(closeWorld);
+      if (fingerTipPos.distanceTo(closeWorld) < CLOSE_TAP_DIST) {
+        // Debounce: only close if we weren't already touching it last frame
+        if (!this._fingerCloseTouch) this._fingerCloseTouch = [null, null];
+        if (this._fingerCloseTouch[handIdx] !== win) {
+          this._fingerCloseTouch[handIdx] = win;
+          win.close();
+          return;
+        }
+      } else {
+        if (this._fingerCloseTouch) this._fingerCloseTouch[handIdx] = null;
+      }
     }
 
     // ── Finger touch interaction (index finger pushing into content) ──
