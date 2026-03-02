@@ -16,6 +16,7 @@ import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
 import { LivePreviewManager } from './live-preview.js';
+import { HandRenderer } from './HandRenderer.js';
 import { initSceneControl } from './scene-control.js';
 
 let scene, camera, clock;
@@ -25,6 +26,7 @@ let codeCity;  // 3D code visualization
 let bubbleMgr; // file bubble browser
 let gitTree;   // 3D git history tree
 let livePreview; // dev server preview manager
+let handRenderer; // 3D glove hand models
 
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
@@ -76,6 +78,9 @@ export function initScene() {
 
   // ── Live Preview (dev server detection) ──
   livePreview = new LivePreviewManager(scene, wm);
+
+  // ── Hand Renderer (3D glove models) ──
+  handRenderer = new HandRenderer(scene);
 
   // ── Live Preview: feed terminal output for server detection ──
   addTermOutputListener((text) => {
@@ -326,14 +331,14 @@ export function initScene() {
             codeCity.onGrabEnd(handIdx);
           }
 
-          // Track right hand for CodeCity tooltips
-          if (handedness === 'right') {
-            const wristPos = getJointPos(src, 'wrist', frame, ref);
-            if (wristPos) codeCity._rightHandPos = wristPos;
+          // Track index finger tips for CodeCity touch detection
+          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
+          if (indexTip) {
+            if (!codeCity._fingerTips) codeCity._fingerTips = [];
+            codeCity._fingerTips[handIdx] = { pos: indexTip, handedness: handedness };
           }
 
           // Hand hover
-          const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
           wm.updateHandHover(handIdx, indexTip);
         }
       }
@@ -346,10 +351,20 @@ export function initScene() {
     const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
     animMgr.update(dt, elapsed, xrCamera);
 
-    // Update CodeCity (matrix rain, hover tooltips)
+    // Update CodeCity (matrix rain, finger-touch tooltips)
     codeCity.updateMatrix(dt);
-    if (renderer.xr.isPresenting) {
-      codeCity.updateHover([ctrl0, ctrl1]);
+    if (renderer.xr.isPresenting && codeCity._fingerTips) {
+      codeCity.updateHover(codeCity._fingerTips);
+    }
+
+    // Update 3D hand glove models
+    if (frame && renderer.xr.isPresenting) {
+      const sess = renderer.xr.getSession();
+      const ref = renderer.xr.getReferenceSpace();
+      if (sess && ref) {
+        const handSources = [...sess.inputSources].filter(s => s.hand);
+        handRenderer.update(frame, ref, handSources);
+      }
     }
 
     // Update file bubbles (bobbing animation)
