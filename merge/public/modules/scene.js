@@ -282,7 +282,7 @@ export function initScene() {
 
   // Per-hand mascot animation state
   // pointFrames: debounce counter — must reach POINT_THRESHOLD before triggering
-  const POINT_THRESHOLD = 8;
+  const POINT_THRESHOLD = 12;
   const handAnimState = [
     { active: null, wasOpen: false, pointFrames: 0 }, // left
     { active: null, wasOpen: false, pointFrames: 0 }, // right
@@ -517,8 +517,14 @@ export function initScene() {
 
           if (handedness === 'right') {
             // Detect flat open right palm: all fingers extended + wide spread (>4cm index→pinky)
+            // ALSO require palm to be very horizontal (palmNormal.y > 0.65 ≈ within ~50° of flat)
+            // This prevents triggering when hand is sideways/vertical (90°)
             const rightPalm = htDetectPalmOpen(src, frame, ref, 'right', renderer);
             let rawPalmOpen = rightPalm.open;
+            if (rawPalmOpen) {
+              // Must be truly flat — palm facing up, not sideways
+              if (!rightPalm.palmNormal || rightPalm.palmNormal.y < 0.65) rawPalmOpen = false;
+            }
             if (rawPalmOpen) {
               const _idxTip = getJointPos(src, 'index-finger-tip', frame, ref);
               const _pkyTip = getJointPos(src, 'pinky-finger-tip', frame, ref);
