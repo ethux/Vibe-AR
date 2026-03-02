@@ -57,13 +57,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message });
 });
 
-// HTTPS server
-const sslOptions = {
-  key: readFileSync(join(rootDir, 'certs', 'key.pem')),
-  cert: readFileSync(join(rootDir, 'certs', 'cert.pem')),
-};
-
-const server = createServer(sslOptions, app);
+// HTTPS server (fall back to HTTP if certs missing)
+let server;
+try {
+  const sslOptions = {
+    key: readFileSync(join(rootDir, 'certs', 'key.pem')),
+    cert: readFileSync(join(rootDir, 'certs', 'cert.pem')),
+  };
+  server = createServer(sslOptions, app);
+} catch (e) {
+  console.warn('[WARN] SSL certs not found, falling back to HTTP on port', PORT);
+  server = createHttpServer(app);
+}
 const proxy = setupTerminalProxy(app, server, TTYD_URL);
 const sceneControl = setupSceneControlWs(server);
 const previewStream = setupPreviewStreamWs(server);

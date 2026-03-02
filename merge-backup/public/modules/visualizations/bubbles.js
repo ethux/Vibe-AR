@@ -571,6 +571,15 @@ class FileBubbleManager {
     return false;
   }
 
+  // Get paths of all bubbles currently held in palm context
+  getPalmContextPaths() {
+    return this.palmBubbles.map(b => {
+      const dir = b.userData.parentDir || '.';
+      const name = b.userData.fileData?.name || '';
+      return dir === '.' ? name : `${dir}/${name}`;
+    });
+  }
+
   // Left hand: pinch free bubble → add to palm context (add only, no removal)
   handleLeftPinchAdd(pinchPoint) {
     if (!this._explorerVisible) return false;
