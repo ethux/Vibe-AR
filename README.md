@@ -4,7 +4,11 @@ Vibecoding, but in AR. Put on a Meta Quest 3, talk to your AI coding assistant, 
 
 Built with Mistral AI (Voxtral STT + Devstral/Mistral Large), ElevenLabs TTS, Three.js, and WebXR.
 
+### Demo Video
+
 > **Status:** Early prototype — the core loop works (voice → code → preview) but not all features are fully polished yet. Lots of improvements to come!
+
+[![Watch the demo video](https://img.youtube.com/vi/ypSmP8fQRYM/maxresdefault.jpg)](https://www.youtube.com/watch?v=ypSmP8fQRYM)
 
 ## Features
 
