@@ -2,7 +2,7 @@
 import { getTermWs, getTerm } from './state.js';
 import { log } from './logging.js';
 import { makeTextTexture } from './textures.js';
-import { enableTtsCollecting } from './tts.js';
+import { speakReply } from './tts.js';
 
 let isRecording = false;
 let mediaRecorder = null;
@@ -32,7 +32,7 @@ async function transcribeAndSend(blob, mime) {
         termWs.send(new TextEncoder().encode('0' + text.trim() + '\r'));
         log(`[STT] Sent: "${text.trim()}"`);
         if (cmdInput) cmdInput.value = '';
-        enableTtsCollecting();
+        speakReply(text.trim());
       }
     } else {
       if (cmdInput) cmdInput.placeholder = 'No speech detected';
