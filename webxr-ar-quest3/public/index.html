@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mistral Vibe AR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      overflow: hidden;
+    }
+
+    #xr-canvas {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%; z-index: 0;
+    }
+
+    #vibe-window {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 900px; max-width: 95vw;
+      height: 620px; max-height: 88vh;
+      background: rgba(12, 12, 18, 0.97);
+      border: 1px solid #2a2a3a;
+      border-radius: 12px;
+      display: flex; flex-direction: column;
+      z-index: 20;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 40px rgba(255,107,0,0.05);
+    }
+
+    #vibe-titlebar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px;
+      background: rgba(20, 20, 30, 0.9);
+      border-bottom: 1px solid #1e1e2e;
+      border-radius: 12px 12px 0 0;
+    }
+    .dots { display: flex; gap: 6px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot.red { background: #ff5f57; }
+    .dot.yellow { background: #febc2e; }
+    .dot.green { background: #28c840; }
+    .title { flex: 1; text-align: center; font-size: 13px; color: #666; }
+    .title span { color: #ff6b00; font-weight: 600; }
+
+    #vibe-status {
+      padding: 6px 16px;
+      background: rgba(15, 15, 22, 0.8);
+      border-bottom: 1px solid #1a1a2a;
+      font-size: 12px; color: #888;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .indicator { width: 8px; height: 8px; border-radius: 50%; background: #28c840; }
+    .indicator.connecting { background: #febc2e; animation: pulse-dot 1s infinite; }
+    .indicator.error { background: #ff5f57; }
+    @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+    #terminal-frame {
+      flex: 1; border: none; width: 100%;
+      background: #0c0c12;
+    }
+
+    #controls {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 16px;
+      border-top: 1px solid #1e1e2e;
+      background: rgba(15, 15, 22, 0.9);
+      border-radius: 0 0 12px 12px;
+    }
+    button {
+      padding: 6px 14px; border-radius: 6px;
+      border: 1px solid #333; background: transparent;
+      color: #888; font-size: 12px; cursor: pointer;
+      font-family: inherit; transition: all 0.2s;
+    }
+    button:hover { border-color: #ff6b00; color: #ff6b00; }
+    #btn-mic {
+      width: 36px; height: 36px; border-radius: 50%;
+      font-size: 16px; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #btn-mic.recording {
+      border-color: #ff4444; color: #ff4444;
+      background: rgba(255,68,68,0.1);
+      animation: pulse-btn 1s infinite;
+    }
+    @keyframes pulse-btn { 0%,100% { transform:scale(1); } 50% { transform:scale(1.08); } }
+    .spacer { flex: 1; }
+    #status-msg { font-size: 11px; color: #555; }
+  </style>
+</head>
+<body>
+  <canvas id="xr-canvas"></canvas>
+
+  <div id="vibe-window">
+    <div id="vibe-titlebar">
+      <div class="dots">
+        <div class="dot red"></div>
+        <div class="dot yellow"></div>
+        <div class="dot green"></div>
+      </div>
+      <div class="title"><span>mistral vibe</span> &mdash; AR terminal</div>
+    </div>
+    <div id="vibe-status">
+      <div class="indicator connecting" id="status-dot"></div>
+      <span id="status-text">Connecting to vibe...</span>
+      <span class="spacer"></span>
+      <span id="status-msg"></span>
+    </div>
+    <iframe id="terminal-frame" src="about:blank"></iframe>
+    <div id="controls">
+      <button id="btn-ar">Start AR</button>
+      <button id="btn-mic">&#x1F3A4;</button>
+      <span class="spacer"></span>
+      <button id="btn-reload">Reload Terminal</button>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
