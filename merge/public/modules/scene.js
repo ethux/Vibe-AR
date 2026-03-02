@@ -175,9 +175,11 @@ export function initScene() {
   ];
 
   // Per-hand mascot animation state
+  // pointFrames: debounce counter — must reach POINT_THRESHOLD before triggering
+  const POINT_THRESHOLD = 8;
   const handAnimState = [
-    { active: null, wasOpen: false },  // left
-    { active: null, wasOpen: false },  // right
+    { active: null, wasOpen: false, pointFrames: 0 },  // left
+    { active: null, wasOpen: false, pointFrames: 0 },  // right
   ];
 
   // Per-hand grab state for CodeCity
@@ -291,11 +293,20 @@ export function initScene() {
           }
 
           if (handedness === 'right') {
-            const isPointing = detectPointing(src, frame, ref);
+            const rawPointing = detectPointing(src, frame, ref);
             const anim = handAnimState[handIdx];
 
-            // Index just raised → spawn mascot + start recording
-            if (isPointing && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            // Debounce: increment counter while pointing, reset instantly on stop
+            if (rawPointing) {
+              anim.pointFrames = Math.min(anim.pointFrames + 1, POINT_THRESHOLD + 1);
+            } else {
+              anim.pointFrames = 0;
+            }
+            const isPointing = anim.pointFrames >= POINT_THRESHOLD;
+
+            // Index held long enough → spawn mascot + start recording
+            if (isPointing && !anim.wasOpen) {
+              anim.wasOpen = true;
               s.lastGestureTime = now;
               if (anim.active) { anim.active.kill(); anim.active = null; }
               const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
@@ -309,18 +320,17 @@ export function initScene() {
             // While pointing, mascot follows index tip
             if (isPointing && anim.active) {
               const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
-              if (indexTip) { const p = indexTip.clone(); p.y += 0.08; anim.active.moveTo(p); }
+              if (indexTip) { const fp = indexTip.clone(); fp.y += 0.08; anim.active.moveTo(fp); }
             }
 
             // Index lowered → hide mascot + stop recording/TTS
-            if (!isPointing && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+            if (!isPointing && anim.wasOpen) {
+              anim.wasOpen = false;
               s.lastGestureTime = now;
               if (anim.active) { anim.active.fastHide(0.08); anim.active = null; }
               if (getIsRecording()) { log('[HAND] right index folded — recording stopped'); stopRecording(); }
               stopTTS();
             }
-
-            anim.wasOpen = isPointing;
           }
 
           // ── Fist detection → CodeCity grab + right hand rotates bubbles ──
