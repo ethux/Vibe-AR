@@ -1,7 +1,7 @@
 // ─── Scene — Three.js setup, controllers, hand tracking, render loop ───
 import {
   getRenderer, setRenderer, getTermWs, WIN_W, WIN_H,
-  getProjectState, setProjectState,
+  getProjectState, setProjectState, getActiveSplash,
 } from './state.js';
 import { log } from './logging.js';
 import { renderTermToCanvas, termRenderCanvas } from './terminal.js';
@@ -12,7 +12,7 @@ import { makeTextTexture } from './textures.js';
 import { addTermOutputListener } from './terminal.js';
 import { stopTTS, isTtsSpeaking } from './tts.js';
 import { AnimationManager } from './AnimationManager.js';
-import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist, detectPointing } from './hand-tracking.js';
+import { getJointPos, detectPalmOpen as htDetectPalmOpen, detectPinch as htDetectPinch, detectFist } from './hand-tracking.js';
 import { CodeCityRenderer } from './CodeCity.js';
 import { FileBubbleManager } from './bubbles.js';
 import { GitTreeRenderer } from './git-tree.js';
@@ -241,6 +241,9 @@ export function initScene() {
   let _backSwipeActive = false;
   const _backSwipeStart = new THREE.Vector3();
 
+  // Right palm openness for smooth mascot scale/fade (0=closed, 1=fully open)
+  let _rightPalmOpenness = 0;
+
   // Left fist double-close → navigate back
   let _leftFistWas = false;
   let _leftFistCount = 0;
@@ -332,11 +335,13 @@ export function initScene() {
                 tmpRay.ray.direction.set(0, 0, -1);
                 if (gitTree.handleRaycast(tmpRay)) continue;
               }
-              // Left hand: palm context — only when it's a real pinch, not a full fist
+              // Left hand: add to palm context only (no removal — removal is right hand)
               if (src.handedness === 'left') {
-                const leftFist = detectFist(src, frame, ref);
-                if (!leftFist.fisting && bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
-              } else if (bubbleMgr.isVisible()) {
+                if (bubbleMgr.isVisible() && bubbleMgr.handleLeftPinchAdd(p.pinchPoint)) continue;
+              } else {
+                // Right hand pinch near palm bubble → remove from context
+                if (bubbleMgr.handleRightPinchRemove(p.pinchPoint)) continue;
+                if (!bubbleMgr.isVisible()) { wm.onPinchStart(handIdx, p.pinchPoint); continue; }
                 // Right hand laser target → click to open immediately (folder nav or file view)
                 if (_laserTargetBubble) {
                   bubbleMgr.openBubble(_laserTargetBubble);
@@ -421,41 +426,52 @@ export function initScene() {
           }
 
           if (handedness === 'right') {
-            const rawPointing = detectPointing(src, frame, ref);
+            // Detect flat open right palm: all fingers extended + wide spread (>4cm index→pinky)
+            const rightPalm = htDetectPalmOpen(src, frame, ref, 'right', renderer);
+            let rawPalmOpen = rightPalm.open;
+            if (rawPalmOpen) {
+              const _idxTip = getJointPos(src, 'index-finger-tip', frame, ref);
+              const _pkyTip = getJointPos(src, 'pinky-finger-tip', frame, ref);
+              if (_idxTip && _pkyTip) rawPalmOpen = _idxTip.distanceTo(_pkyTip) > 0.04;
+            }
             const anim = handAnimState[handIdx];
 
-            // Debounce: increment counter while pointing, reset instantly on stop
-            if (rawPointing) {
+            // Debounce: require sustained flat open palm before triggering
+            if (rawPalmOpen) {
               anim.pointFrames = Math.min(anim.pointFrames + 1, POINT_THRESHOLD + 1);
             } else {
               anim.pointFrames = 0;
             }
-            const isPointing = anim.pointFrames >= POINT_THRESHOLD;
+            const isOpen = anim.pointFrames >= POINT_THRESHOLD;
 
-            // Index held long enough → spawn mascot + start recording
-            if (isPointing && !anim.wasOpen) {
+            // Palm held flat long enough → spawn mascot + start recording
+            if (isOpen && !anim.wasOpen) {
               anim.wasOpen = true;
               if (anim.active) { anim.active.kill(); anim.active = null; }
-              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
-              const spawnPos = indexTip ? indexTip.clone() : new THREE.Vector3(0, 1.4, -0.5);
+              const spawnPos = rightPalm.palmCenter ? rightPalm.palmCenter.clone() : new THREE.Vector3(0, 1.4, -0.5);
               spawnPos.y += 0.08;
               anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'idle' });
-              log('[HAND] right index pointed — recording started');
+              log('[HAND] right palm open flat — recording started');
               if (!getIsRecording()) startRecording();
             }
 
-            // While pointing, mascot follows index tip
-            if (isPointing && anim.active) {
-              const indexTip = getJointPos(src, 'index-finger-tip', frame, ref);
-              if (indexTip) { const fp = indexTip.clone(); fp.y += 0.08; anim.active.moveTo(fp); }
+            // While palm open, mascot follows palm center
+            if (isOpen && anim.active && rightPalm.palmCenter) {
+              const fp = rightPalm.palmCenter.clone(); fp.y += 0.08; anim.active.moveTo(fp);
             }
 
-            // Index lowered → hide mascot + stop recording/TTS
-            if (!isPointing && anim.wasOpen) {
+            // Palm closed → hide mascot + stop recording/TTS
+            if (!isOpen && anim.wasOpen) {
               anim.wasOpen = false;
               if (anim.active) { anim.active.fastHide(0.08); anim.active = null; }
-              if (getIsRecording()) { log('[HAND] right index folded — recording stopped'); stopRecording(); }
+              if (getIsRecording()) { log('[HAND] right palm closed — recording stopped'); stopRecording(); }
               stopTTS();
+            }
+
+            // Continuous openness tracking → smooth scale + fade as hand closes (0→0.3 range)
+            _rightPalmOpenness += ((rawPalmOpen ? 1 : 0) - _rightPalmOpenness) * Math.min(1, dt * 8);
+            if (anim.active) {
+              anim.active.setVisScale(_rightPalmOpenness < 0.3 ? _rightPalmOpenness / 0.3 : 1.0);
             }
           }
 
@@ -575,6 +591,12 @@ export function initScene() {
 
     // Update live preview (pulse animation)
     livePreview.update(dt, elapsed);
+
+    // ── Startup splash ──
+    const _splash = getActiveSplash();
+    if (_splash && !_splash.done) {
+      _splash.tick(xrCamera, ts ?? performance.now());
+    }
 
     renderer.render(scene, camera);
   });
