@@ -1,8 +1,7 @@
 // ─── AR session with DOM overlay for keyboard input ───
-import { getRenderer, setXrSession, setActiveSplash } from './state.js';
+import { getRenderer, setXrSession, setActiveSplash, getScene } from './state.js';
 import { log } from './logging.js';
 import { createStartupSplash } from './startup-splash.js';
-import { getScene } from './scene.js';
 
 export async function startARSession() {
   if (!navigator.xr) throw new Error('No WebXR');
