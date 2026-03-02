@@ -51,9 +51,17 @@ class GitTreeRenderer {
 
     // HEAD glow particles
     this._headParticles = null;
+
+    // Polling for realtime updates
+    this._pollTimer = null;
+    this._lastSnapshot = '';  // hash of HEAD + branch list to detect changes
   }
 
-  // ── Fetch git history via companion terminal ──────────────────
+  _log(msg) {
+    const m = `[GIT-TREE] ${msg}`;
+    console.log(m);
+    fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: m }) }).catch(() => {});
+  }
 
   // Helper: run a git command via the web server's /api/git/run endpoint
   async _gitRun(command, cwd) {
@@ -69,19 +77,19 @@ class GitTreeRenderer {
       // Test with a simple command — if it finds a repo, returncode=0
       const checkData = await this._gitRun('git rev-parse --show-toplevel');
       if (checkData.returncode !== 0) {
-        console.log('[GIT-TREE] No git repo found in workspace.');
+        this._log('No git repo found in workspace');
         return;
       }
       const repoPath = (checkData.stdout || '').trim();
-      console.log(`[GIT-TREE] Found git repo at: ${repoPath}`);
+      this._log(`Found git repo at: ${repoPath}`);
 
-      // Fetch git log with structured format
+      // Fetch git log with structured format (including %P for parent hashes)
       const logData = await this._gitRun(
-        'git log --all --oneline --graph --decorate --format="%H|%h|%s|%an|%ar|%D" -50'
+        'git log --all --decorate --format="%H|%h|%P|%s|%an|%ar|%D" -50'
       );
 
       if (logData.returncode !== 0) {
-        console.log('[GIT-TREE] Git repo has no commits yet.');
+        this._log(`Git log failed: ${logData.stderr}`);
         return;
       }
 
@@ -89,14 +97,86 @@ class GitTreeRenderer {
       const branchData = await this._gitRun('git branch --show-current');
       this.currentBranch = (branchData.stdout || '').trim();
 
+      // Fetch all branches with their HEAD commits
+      const allBranchData = await this._gitRun('git branch -a --format="%(refname:short) %(objectname:short)"');
+
       // Parse the log output
       this._parseGitLog(logData.stdout || '');
+      this._log(`Parsed ${this.commits.length} commits, HEAD=${this.headHash?.substring(0,7)}`);
+
+      // Enrich branch info from explicit branch listing
+      if (allBranchData.returncode === 0) {
+        for (const line of (allBranchData.stdout || '').split('\n')) {
+          const parts = line.trim().split(' ');
+          if (parts.length >= 2) {
+            const [branchName, shortHash] = parts;
+            if (!this.branches[branchName]) {
+              this.branches[branchName] = shortHash;
+            }
+            // Tag commit with branch name if not already tagged
+            const commit = this.commits.find(c => c.shortHash === shortHash || c.hash.startsWith(shortHash));
+            if (commit && !commit.branchNames.includes(branchName)) {
+              commit.branchNames.push(branchName);
+            }
+          }
+        }
+      }
+
+      // Build snapshot fingerprint to detect future changes
+      const branchList = Object.keys(this.branches).sort().join(',');
+      this._lastSnapshot = `${this.headHash}|${this.commits.length}|${branchList}`;
 
       // Render the tree
       this.clearTree();
       this.renderTree();
+      this._log(`Rendered ${this.commitMeshes.length} commit spheres`);
+
+      // Start polling for realtime updates
+      this.startPolling();
     } catch (e) {
-      console.warn('[GIT-TREE] Could not load history:', e.message || e);
+      this._log(`ERROR: ${e.message || e}`);
+    }
+  }
+
+  // ── Realtime polling — detect new commits/branches ────────────
+
+  startPolling(intervalMs = 5000) {
+    this.stopPolling();
+    this._pollTimer = setInterval(() => this._checkForUpdates(), intervalMs);
+    this._log(`Polling started (${intervalMs}ms)`);
+  }
+
+  stopPolling() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
+
+  async _checkForUpdates() {
+    try {
+      // Quick lightweight check: HEAD hash + commit count + branch names
+      const [headData, countData, branchData] = await Promise.all([
+        this._gitRun('git rev-parse HEAD'),
+        this._gitRun('git rev-list --all --count'),
+        this._gitRun('git branch -a --format="%(refname:short)"'),
+      ]);
+
+      if (headData.returncode !== 0) return;
+
+      const headHash = (headData.stdout || '').trim();
+      const count = (countData.stdout || '').trim();
+      const branches = (branchData.stdout || '').trim().split('\n').sort().join(',');
+      const snapshot = `${headHash}|${count}|${branches}`;
+
+      if (snapshot !== this._lastSnapshot) {
+        this._log(`Change detected — reloading tree`);
+        // Stop polling during reload, loadHistory will restart it
+        this.stopPolling();
+        await this.loadHistory();
+      }
+    } catch (e) {
+      // Silently ignore polling errors
     }
   }
 
@@ -109,17 +189,15 @@ class GitTreeRenderer {
 
     const lines = raw.split('\n').filter(l => l.trim());
     const commitMap = new Map();
-    const graphLanes = [];      // track which lane each branch occupies
 
-    // First pass: extract commits from the formatted output
-    // The --format output intersperses with graph characters.
-    // We look for lines matching our delimiter pattern.
+    // Format: %H|%h|%P|%s|%an|%ar|%D
+    // %P = space-separated parent hashes
     for (const line of lines) {
-      // Find lines containing our pipe-delimited format
-      const match = line.match(/([a-f0-9]{40})\|([a-f0-9]+)\|(.*?)\|(.*?)\|(.*?)\|(.*)/);
+      const match = line.match(/([a-f0-9]{40})\|([a-f0-9]+)\|([\sa-f0-9]*)\|(.*?)\|(.*?)\|(.*?)\|(.*)/);
       if (!match) continue;
 
-      const [, hash, shortHash, subject, author, date, decorations] = match;
+      const [, hash, shortHash, parentStr, subject, author, date, decorations] = match;
+      const parents = parentStr.trim() ? parentStr.trim().split(/\s+/) : [];
       const commit = {
         hash,
         shortHash,
@@ -127,11 +205,12 @@ class GitTreeRenderer {
         author: author.trim(),
         date: date.trim(),
         decorations: decorations.trim(),
-        parents: [],
+        parents,
         children: [],
         branchNames: [],
         tags: [],
         isHead: false,
+        isMerge: parents.length > 1,
         lane: 0,
       };
 
@@ -150,13 +229,11 @@ class GitTreeRenderer {
             commit.isHead = true;
             this.headHash = hash;
           } else {
-            // Branch reference (could be origin/xxx or local)
             commit.branchNames.push(dec.trim());
           }
         }
       }
 
-      // Track branches
       for (const bn of commit.branchNames) {
         this.branches[bn] = hash;
       }
@@ -165,96 +242,94 @@ class GitTreeRenderer {
       commitMap.set(hash, commit);
     }
 
-    // If no commits parsed, bail
     if (this.commits.length === 0) return;
 
-    // Set HEAD if not found from decorations
     if (!this.headHash && this.commits.length > 0) {
       this.headHash = this.commits[0].hash;
       this.commits[0].isHead = true;
     }
 
-    // Second pass: determine parent-child relationships
-    // Fetch parent info via a separate command for accuracy
-    this._resolveParentsFromOrder(commitMap);
-
-    // Assign lanes (horizontal positions for branches)
-    this._assignLanes();
-  }
-
-  _resolveParentsFromOrder(commitMap) {
-    // In a simple log listing (newest first), each commit's parent is
-    // generally the next commit in the list for linear history.
-    // For branches/merges, we rely on the graph structure.
-    // As a robust fallback, we link each commit to the next one.
-    for (let i = 0; i < this.commits.length - 1; i++) {
-      const current = this.commits[i];
-      const next = this.commits[i + 1];
-      current.parents.push(next.hash);
-      next.children.push(current.hash);
-    }
-  }
-
-  _assignLanes() {
-    // Simple lane assignment: main branch gets lane 0,
-    // branches spread outward based on detection of branch points
-    const laneMap = new Map();
-    let nextLane = 0;
-
-    // Determine which branch each commit belongs to
-    // Start from the HEAD commit and walk backwards
-    const visited = new Set();
-
-    // Assign the current branch to lane 0
-    const mainBranchCommits = new Set();
+    // Build children from parent data
     for (const commit of this.commits) {
-      if (commit.branchNames.some(b =>
-        b === this.currentBranch ||
-        b === 'main' || b === 'master' ||
-        b.includes('HEAD')
-      )) {
-        mainBranchCommits.add(commit.hash);
+      for (const ph of commit.parents) {
+        const parent = commitMap.get(ph);
+        if (parent) parent.children.push(commit.hash);
       }
     }
 
-    // Walk from HEAD along parents to mark main lane
-    let walkHash = this.headHash;
-    const commitMap = new Map(this.commits.map(c => [c.hash, c]));
-    while (walkHash) {
-      mainBranchCommits.add(walkHash);
-      const c = commitMap.get(walkHash);
+    this._assignLanes(commitMap);
+  }
+
+  _assignLanes(commitMap) {
+    // Walk from HEAD along first-parents → lane 0 (main trunk)
+    const mainSet = new Set();
+    let walk = this.headHash;
+    while (walk) {
+      mainSet.add(walk);
+      const c = commitMap.get(walk);
       if (!c || c.parents.length === 0) break;
-      walkHash = c.parents[0];
+      walk = c.parents[0]; // first parent = main line
     }
 
-    // Assign lanes
-    let branchLane = 1;
-    const branchLaneAssigned = new Map();
-
+    // Assign lane 0 to main trunk
     for (const commit of this.commits) {
-      if (mainBranchCommits.has(commit.hash)) {
+      if (mainSet.has(commit.hash)) {
         commit.lane = 0;
-      } else {
-        // Check if any of its branch names already has a lane
-        let assignedLane = null;
-        for (const bn of commit.branchNames) {
-          if (branchLaneAssigned.has(bn)) {
-            assignedLane = branchLaneAssigned.get(bn);
-            break;
+      }
+    }
+
+    // For non-main commits, walk each branch tip backwards to find
+    // where it diverges from main, and assign a lane
+    let nextLane = 1;
+    const hashToLane = new Map();
+    for (const c of this.commits) {
+      if (mainSet.has(c.hash)) {
+        hashToLane.set(c.hash, 0);
+      }
+    }
+
+    // Process commits top-down (newest first, which is the array order)
+    for (const commit of this.commits) {
+      if (hashToLane.has(commit.hash)) continue; // already assigned
+
+      // This commit is off the main trunk — assign a branch lane
+      // Check if a sibling (same parent) already has a lane
+      let lane = null;
+      for (const ph of commit.parents) {
+        const parent = commitMap.get(ph);
+        if (!parent) continue;
+        // If parent is on main and has multiple children, this is a branch
+        for (const ch of parent.children) {
+          if (ch !== commit.hash && hashToLane.has(ch)) {
+            // Sibling already has a lane, use a new one
           }
         }
-        if (assignedLane === null) {
-          // Check if parent has children in different lanes
-          assignedLane = branchLane;
-          branchLane++;
-          // Alternate left and right
-          if (branchLane > 4) branchLane = 1;
-          for (const bn of commit.branchNames) {
-            branchLaneAssigned.set(bn, assignedLane);
-          }
-        }
-        // Alternate sides: odd lanes go right, even go left
-        commit.lane = assignedLane % 2 === 0 ? -(assignedLane / 2) : Math.ceil(assignedLane / 2);
+      }
+
+      if (lane === null) {
+        lane = nextLane;
+        // Alternate sides: 1, -1, 2, -2, 3, -3...
+        nextLane++;
+      }
+
+      // Walk this branch backwards until we hit main or a known lane
+      const branchCommits = [commit.hash];
+      let w = commit.hash;
+      while (true) {
+        const c = commitMap.get(w);
+        if (!c || c.parents.length === 0) break;
+        const fp = c.parents[0];
+        if (mainSet.has(fp) || hashToLane.has(fp)) break;
+        branchCommits.push(fp);
+        w = fp;
+      }
+
+      // Convert lane number to alternating left/right offset
+      const offset = lane % 2 === 1 ? Math.ceil(lane / 2) : -(lane / 2);
+      for (const h of branchCommits) {
+        hashToLane.set(h, offset);
+        const c = commitMap.get(h);
+        if (c) c.lane = offset;
       }
     }
   }
@@ -271,19 +346,33 @@ class GitTreeRenderer {
     const LANE_SPACING = 0.09;
     const SPHERE_RADIUS = 0.02;
 
-    // Assign a color index to each unique branch
-    const branchColorMap = new Map();
-    let colorIdx = 0;
-    // Current branch always gets orange (index 0)
-    if (this.currentBranch) branchColorMap.set(this.currentBranch, 0);
+    // ── Assign a color to each lane (= branch) ──
+    const laneColorMap = new Map();
+    laneColorMap.set(0, BRANCH_COLORS[0]); // main trunk = Mistral orange
 
+    // Find branch tips per lane so we can name them
+    const laneBranchName = new Map();
+    laneBranchName.set(0, this.currentBranch || 'main');
     for (const commit of this.commits) {
-      for (const bn of commit.branchNames) {
-        if (!branchColorMap.has(bn) && !bn.startsWith('origin/')) {
-          colorIdx++;
-          branchColorMap.set(bn, colorIdx % BRANCH_COLORS.length);
-        }
+      if (commit.lane !== 0 && commit.branchNames.length > 0 && !laneBranchName.has(commit.lane)) {
+        const bn = commit.branchNames.find(b => !b.startsWith('origin/')) || commit.branchNames[0];
+        laneBranchName.set(commit.lane, bn);
       }
+    }
+
+    // Assign colors to each unique lane
+    let colorIdx = 1; // 0 is reserved for main
+    for (const commit of this.commits) {
+      if (!laneColorMap.has(commit.lane)) {
+        laneColorMap.set(commit.lane, BRANCH_COLORS[colorIdx % BRANCH_COLORS.length]);
+        colorIdx++;
+      }
+    }
+
+    // Also build branchName → color for labels
+    const branchColorMap = new Map();
+    for (const [lane, bn] of laneBranchName) {
+      branchColorMap.set(bn, laneColorMap.get(lane) || CYAN);
     }
 
     // Compute positions for all commits
@@ -309,11 +398,8 @@ class GitTreeRenderer {
         const toPos = posMap.get(parentHash);
         if (!toPos) continue;
 
-        // Determine color for this connection
-        let lineColor = CYAN;
-        if (commit.isHead || commit.branchNames.includes(this.currentBranch)) {
-          lineColor = ORANGE;
-        }
+        // Color connection by child commit's lane
+        const lineColor = laneColorMap.get(commit.lane) || CYAN;
 
         // If same lane, draw straight line; otherwise draw a curve
         if (Math.abs(fromPos.x - toPos.x) < 0.001) {
@@ -360,13 +446,8 @@ class GitTreeRenderer {
       const pos = posMap.get(commit.hash);
       if (!pos) continue;
 
-      // Determine sphere color
-      let sphereColor = CYAN;
-      if (commit.isHead) {
-        sphereColor = ORANGE;
-      } else if (commit.branchNames.includes(this.currentBranch)) {
-        sphereColor = ORANGE;
-      }
+      // Determine sphere color from lane
+      const sphereColor = laneColorMap.get(commit.lane) || CYAN;
 
       // Main commit sphere
       const geo = new THREE.SphereGeometry(SPHERE_RADIUS, 16, 12);
@@ -399,6 +480,7 @@ class GitTreeRenderer {
         commit,
         baseEmissive: 0.6,
         pos: pos.clone(),
+        branchColor: sphereColor,
       });
 
       // ── HEAD commit: extra particle ring effect ──
@@ -431,7 +513,10 @@ class GitTreeRenderer {
       if (labeledPositions.has(labelText)) continue;
       labeledPositions.set(labelText, true);
 
-      const sprite = this._makeLabel(labelText, commit.isHead);
+      // Pick label color from branch
+      const labelBranch = commit.branchNames.find(b => !b.startsWith('origin/'));
+      const labelColor = labelBranch ? (branchColorMap.get(labelBranch) || laneColorMap.get(commit.lane) || CYAN) : (commit.isHead ? ORANGE : laneColorMap.get(commit.lane) || CYAN);
+      const sprite = this._makeLabel(labelText, commit.isHead, labelColor);
       // Position label to the right of the commit
       sprite.position.set(
         pos.x + SPHERE_RADIUS * 3 + 0.04,
@@ -553,14 +638,18 @@ class GitTreeRenderer {
 
   // ── Sprite label helpers ──────────────────────────────────────
 
-  _makeLabel(text, isHead) {
+  _makeLabel(text, isHead, color) {
     const CW = 256, CH = 40;
     const canvas = document.createElement('canvas');
     canvas.width = CW; canvas.height = CH;
     const ctx = canvas.getContext('2d');
 
-    // Background pill
-    ctx.fillStyle = isHead ? 'rgba(255, 112, 0, 0.85)' : 'rgba(0, 206, 209, 0.7)';
+    // Background pill — use branch color
+    const hex = (color || CYAN).toString(16).padStart(6, '0');
+    const cr = parseInt(hex.substring(0, 2), 16);
+    const cg = parseInt(hex.substring(2, 4), 16);
+    const cb = parseInt(hex.substring(4, 6), 16);
+    ctx.fillStyle = isHead ? `rgba(${cr}, ${cg}, ${cb}, 0.9)` : `rgba(${cr}, ${cg}, ${cb}, 0.75)`;
     const r = CH / 2 - 2;
     ctx.beginPath();
     if (ctx.roundRect) {
@@ -577,8 +666,8 @@ class GitTreeRenderer {
     }
     ctx.fill();
 
-    // Text
-    ctx.fillStyle = isHead ? '#FFFFFF' : '#0c0c12';
+    // Text — always white for readability on colored pills
+    ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 20px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -986,10 +1075,9 @@ class GitTreeRenderer {
   }
 
   clearHighlights() {
-    // Reset all commit colors to their original branch-based colors
+    // Reset all commit colors to their stored branch colors
     for (const cm of this.commitMeshes) {
-      const isOnCurrent = cm.commit.isHead || cm.commit.branchNames.includes(this.currentBranch);
-      const baseColor = isOnCurrent ? ORANGE : CYAN;
+      const baseColor = cm.branchColor || CYAN;
       if (cm.mesh.material) {
         cm.mesh.material.color.setHex(baseColor);
         cm.mesh.material.emissive.setHex(baseColor);
@@ -1058,6 +1146,12 @@ class GitTreeRenderer {
       this._detailWindow.close();
       this._detailWindow = null;
     }
+  }
+
+  destroy() {
+    this.stopPolling();
+    this.clearTree();
+    this.scene.remove(this.treeGroup);
   }
 }
 
