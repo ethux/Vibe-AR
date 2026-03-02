@@ -33,9 +33,11 @@ class WindowManager {
     this._twoHandAnchor = null;
 
     // Hand GRAB state (closed fist — move/rotate/scale windows like Code City)
+    // hitOffset: winPos - ray hit point on window surface
+    // planeNormal/planeDot: define the plane the window was on at grab start
     this._handGrabState = [
-      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3() },
-      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3() },
+      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3(), hitOffset: new THREE.Vector3(), planeNormal: null, planeDot: 0 },
+      { grabbing: false, window: null, offset: new THREE.Vector3(), point: new THREE.Vector3(), hitOffset: new THREE.Vector3(), planeNormal: null, planeDot: 0 },
     ];
     this._grabTwoHandAnchor = null;
 
@@ -43,6 +45,12 @@ class WindowManager {
     this._contentInteraction = [
       { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
       { active: false, window: null, startPoint: new THREE.Vector3(), startTime: 0, lastPoint: new THREE.Vector3(), totalMove: 0, scrollAmount: 0 },
+    ];
+
+    // Finger touch state (per hand) — index finger pushing into content to scroll
+    this._fingerTouchState = [
+      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
+      { active: false, window: null, lastPoint: new THREE.Vector3(), scrollAccum: 0 },
     ];
 
     // Controller content interaction state
@@ -237,6 +245,14 @@ class WindowManager {
   // ── Hand pinch interaction ────────────────────────────────────
 
   onPinchStart(handIdx, pinchPoint) {
+    // End any active finger touch — pinch takes priority
+    const ft = this._fingerTouchState[handIdx];
+    if (ft.active && ft.window && ft.window.onContentInteraction) {
+      ft.window.onContentInteraction(null, 'end', handIdx);
+    }
+    ft.active = false;
+    ft.window = null;
+
     const otherState = this._handDragState[1 - handIdx];
 
     // If the OTHER hand is already dragging a window,
@@ -390,7 +406,7 @@ class WindowManager {
     if (state.dragging && state.window) {
       const other = this._handDragState[1 - handIdx];
 
-      // Two-hand mode: rotate + scale + move
+      // Two-hand mode: rotate + scale around window center
       if (other.dragging && other.window === state.window && this._twoHandAnchor) {
         const anchor = this._twoHandAnchor;
         const win = state.window;
@@ -399,36 +415,26 @@ class WindowManager {
         const p1 = this._handDragState[1].pinchPoint;
         if (!p0 || !p1) return;
 
-        const lx0 = anchor.local0.x, lz0 = anchor.local0.z;
-        const lx1 = anchor.local1.x, lz1 = anchor.local1.z;
-        const wx0 = p0.x, wz0 = p0.z;
-        const wx1 = p1.x, wz1 = p1.z;
+        const wdx = p1.x - p0.x, wdz = p1.z - p0.z;
+        const curDist  = Math.sqrt(wdx * wdx + wdz * wdz);
+        const curAngle = Math.atan2(wdx, wdz);
+        const curMid   = new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5);
 
-        const ldx = lx1 - lx0, ldz = lz1 - lz0;
-        const localDist = Math.sqrt(ldx * ldx + ldz * ldz);
-        const wdx = wx1 - wx0, wdz = wz1 - wz0;
-        const worldDist = Math.sqrt(wdx * wdx + wdz * wdz);
-
-        const newScale = (localDist > 0.001)
-          ? Math.max(0.2, Math.min(4.0, worldDist / localDist))
+        // Scale from hand distance ratio
+        const newScale = (anchor.startHandDist > 0.001)
+          ? Math.max(0.2, Math.min(4.0, anchor.startScale * curDist / anchor.startHandDist))
           : anchor.startScale;
         win.root.scale.setScalar(newScale);
 
-        const localAngle = Math.atan2(ldx, ldz);
-        const worldAngle = Math.atan2(wdx, wdz);
-        const newRotY = worldAngle - localAngle;
-        win.root.rotation.y = newRotY;
+        // Rotation from hand angle delta
+        const rotDelta = curAngle - anchor.startHandAngle;
+        win.root.rotation.y = anchor.startRotY + rotDelta;
 
-        const cosR = Math.cos(newRotY);
-        const sinR = Math.sin(newRotY);
-        const scaledLocalX = lx0 * newScale;
-        const scaledLocalZ = lz0 * newScale;
-        const rotatedX = scaledLocalX * cosR + scaledLocalZ * sinR;
-        const rotatedZ = -scaledLocalX * sinR + scaledLocalZ * cosR;
-
-        win.root.position.x = wx0 - rotatedX;
-        win.root.position.z = wz0 - rotatedZ;
-        win.root.position.y = (p0.y + p1.y) / 2 - (anchor.local0.y + anchor.local1.y) / 2 * newScale;
+        // Position: window center follows hand midpoint delta
+        const midDelta = curMid.clone().sub(anchor.startHandMid);
+        win.root.position.x = anchor.startPos.x + midDelta.x;
+        win.root.position.z = anchor.startPos.z + midDelta.z;
+        win.root.position.y = anchor.startPos.y + midDelta.y;
 
       } else if (!other.dragging || other.window !== state.window) {
         // Single-hand drag
@@ -458,9 +464,7 @@ class WindowManager {
       return true;
     }
 
-    // Grab the nearest open window — no distance limit.
-    // Raycast from camera through grabCenter to find the hit point on the window
-    // so the anchor is where the ray hits, not where the hand is.
+    // Grab nearest window — offset from hand so window doesn't snap
     let closest = null;
     let closestDist = Infinity;
     for (const win of this.windows) {
@@ -468,27 +472,14 @@ class WindowManager {
       const winPos = new THREE.Vector3();
       win.root.getWorldPosition(winPos);
       const d = grabCenter.distanceTo(winPos);
-      if (d < closestDist) {
-        closestDist = d;
-        closest = win;
-      }
+      if (d < closestDist) { closestDist = d; closest = win; }
     }
     if (closest) {
-      // Raycast from camera through hand to find intersection on the window frame
-      const cam = this.camera;
-      const camPos = new THREE.Vector3();
-      cam.getWorldPosition(camPos);
-      const rayDir = grabCenter.clone().sub(camPos).normalize();
-      this._raycaster.set(camPos, rayDir);
-      const hits = this._raycaster.intersectObjects(closest.getInteractableMeshes(), false);
-      // Offset = window pos minus hit point (or hand if no hit)
-      const anchor = (hits.length > 0) ? hits[0].point : grabCenter;
-
       const gs = this._handGrabState[handIdx];
       gs.grabbing = true;
       gs.window = closest;
       gs.point.copy(grabCenter);
-      gs.offset.copy(closest.root.position).sub(anchor);
+      gs.offset.copy(closest.root.position).sub(grabCenter);
       closest.dragging = true;
       closest.focus();
       return true;
@@ -523,44 +514,33 @@ class WindowManager {
     const otherGs = this._handGrabState[1 - handIdx];
 
     if (otherGs.grabbing && otherGs.window === win) {
-      // ── Two-hand: rotate + scale + move ──
+      // ── Two-hand: rotate + scale around window center ──
       if (!this._grabTwoHandAnchor) this._initGrabTwoHandAnchor(win);
       const anchor = this._grabTwoHandAnchor;
 
       const p0 = this._handGrabState[0].point;
       const p1 = this._handGrabState[1].point;
 
-      const lx0 = anchor.local0.x, lz0 = anchor.local0.z;
-      const lx1 = anchor.local1.x, lz1 = anchor.local1.z;
-      const wx0 = p0.x, wz0 = p0.z;
-      const wx1 = p1.x, wz1 = p1.z;
+      const wdx = p1.x - p0.x, wdz = p1.z - p0.z;
+      const curDist  = Math.sqrt(wdx * wdx + wdz * wdz);
+      const curAngle = Math.atan2(wdx, wdz);
+      const curMid   = new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5);
 
-      const ldx = lx1 - lx0, ldz = lz1 - lz0;
-      const localDist = Math.sqrt(ldx * ldx + ldz * ldz);
-      const wdx = wx1 - wx0, wdz = wz1 - wz0;
-      const worldDist = Math.sqrt(wdx * wdx + wdz * wdz);
-
-      const newScale = (localDist > 0.001)
-        ? Math.max(0.2, Math.min(4.0, worldDist / localDist))
+      // Scale from hand distance ratio
+      const newScale = (anchor.startHandDist > 0.001)
+        ? Math.max(0.2, Math.min(4.0, anchor.startScale * curDist / anchor.startHandDist))
         : anchor.startScale;
       win.root.scale.setScalar(newScale);
 
-      const localAngle = Math.atan2(ldx, ldz);
-      const worldAngle = Math.atan2(wdx, wdz);
-      const newRotY = worldAngle - localAngle;
-      win.root.rotation.y = newRotY;
+      // Rotation from hand angle delta
+      const rotDelta = curAngle - anchor.startHandAngle;
+      win.root.rotation.y = anchor.startRotY + rotDelta;
 
-      const cosR = Math.cos(newRotY);
-      const sinR = Math.sin(newRotY);
-      const sx = lx0 * newScale;
-      const sz = lz0 * newScale;
-      const rx = sx * cosR + sz * sinR;
-      const rz = -sx * sinR + sz * cosR;
-
-      win.root.position.x = wx0 - rx;
-      win.root.position.z = wz0 - rz;
-      win.root.position.y = (p0.y + p1.y) / 2
-        - (anchor.local0.y + anchor.local1.y) / 2 * newScale;
+      // Position: window center follows hand midpoint delta
+      const midDelta = curMid.clone().sub(anchor.startHandMid);
+      win.root.position.x = anchor.startPos.x + midDelta.x;
+      win.root.position.z = anchor.startPos.z + midDelta.z;
+      win.root.position.y = anchor.startPos.y + midDelta.y;
 
     } else {
       // ── Single-hand: window follows hand ──
@@ -572,14 +552,14 @@ class WindowManager {
     const p0 = this._handGrabState[0].point;
     const p1 = this._handGrabState[1].point;
 
-    const invMatrix = new THREE.Matrix4().copy(win.root.matrixWorld).invert();
-    const local0 = p0.clone().applyMatrix4(invMatrix);
-    const local1 = p1.clone().applyMatrix4(invMatrix);
-
+    const dx = p1.x - p0.x, dz = p1.z - p0.z;
     this._grabTwoHandAnchor = {
-      local0,
-      local1,
-      startScale: win.root.scale.x,
+      startHandDist:  Math.sqrt(dx * dx + dz * dz),
+      startHandAngle: Math.atan2(dx, dz),
+      startHandMid:   new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5),
+      startPos:       win.root.position.clone(),
+      startRotY:      win.root.rotation.y,
+      startScale:     win.root.scale.x,
     };
   }
 
@@ -590,14 +570,14 @@ class WindowManager {
     const p1 = this._handDragState[1].pinchPoint;
     if (!p0 || !p1) return;
 
-    const invMatrix = new THREE.Matrix4().copy(win.root.matrixWorld).invert();
-    const local0 = p0.clone().applyMatrix4(invMatrix);
-    const local1 = p1.clone().applyMatrix4(invMatrix);
-
+    const dx = p1.x - p0.x, dz = p1.z - p0.z;
     this._twoHandAnchor = {
-      local0,
-      local1,
-      startScale: win.root.scale.x,
+      startHandDist:  Math.sqrt(dx * dx + dz * dz),
+      startHandAngle: Math.atan2(dx, dz),
+      startHandMid:   new THREE.Vector3().addVectors(p0, p1).multiplyScalar(0.5),
+      startPos:       win.root.position.clone(),
+      startRotY:      win.root.rotation.y,
+      startScale:     win.root.scale.x,
     };
   }
 
@@ -624,50 +604,41 @@ class WindowManager {
     const win = rs.window;
     const worldDelta = currentPoint.clone().sub(rs.startPoint);
 
-    // Project delta into the window's local space so resize works regardless of rotation
-    const invQuat = win.root.quaternion.clone().invert();
-    const delta = worldDelta.clone().applyQuaternion(invQuat);
+    // Project delta onto window's world-space right and up axes
+    const localRight = new THREE.Vector3(1, 0, 0).applyQuaternion(win.root.quaternion);
+    const localUp    = new THREE.Vector3(0, 1, 0).applyQuaternion(win.root.quaternion);
+    const dx = worldDelta.dot(localRight);
+    const dy = worldDelta.dot(localUp);
 
     let newW = rs.startWidth;
     let newH = rs.startHeight;
 
-    if (rs.edge === 'right' || rs.edge === 'br' || rs.edge === 'tr') newW = rs.startWidth + delta.x;
-    if (rs.edge === 'left'  || rs.edge === 'bl' || rs.edge === 'tl') newW = rs.startWidth - delta.x;
-    if (rs.edge === 'bottom'|| rs.edge === 'bl' || rs.edge === 'br') newH = rs.startHeight - delta.y;
-    if (rs.edge === 'top'   || rs.edge === 'tl' || rs.edge === 'tr') newH = rs.startHeight + delta.y;
+    if (rs.edge === 'right' || rs.edge === 'br' || rs.edge === 'tr') newW = rs.startWidth + dx;
+    if (rs.edge === 'left'  || rs.edge === 'bl' || rs.edge === 'tl') newW = rs.startWidth - dx;
+    if (rs.edge === 'bottom'|| rs.edge === 'bl' || rs.edge === 'br') newH = rs.startHeight - dy;
+    if (rs.edge === 'top'   || rs.edge === 'tl' || rs.edge === 'tr') newH = rs.startHeight + dy;
 
     newW = Math.max(win.minWidth, Math.min(win.maxWidth, newW));
     newH = Math.max(win.minHeight, Math.min(win.maxHeight, newH));
 
-    if (Math.abs(newW - win.width) > 0.005 || Math.abs(newH - win.height) > 0.005) {
-      // Use scale-based resize — fast, no rebuild needed
-      const scaleX = newW / rs.startWidth;
-      const scaleY = newH / rs.startHeight;
-      win.root.scale.set(scaleX, scaleY, 1);
+    if (Math.abs(newW - win.width) > 0.01 || Math.abs(newH - win.height) > 0.01) {
       win.width = newW;
       win.height = newH;
+      const quat = win.root.quaternion.clone();
+      while (win.root.children.length > 0) win.root.remove(win.root.children[0]);
+      const BORDER = 0.006, TITLEBAR_H = 0.035;
+      win._buildFrame(newW, newH);
+      win._buildContent(newW, newH, BORDER, TITLEBAR_H);
+      win._buildTitleBar(newW, TITLEBAR_H, BORDER);
+      win._buildBorders(newW, newH, BORDER, TITLEBAR_H);
+      win._buildResizeHandles(newW, newH, BORDER, TITLEBAR_H);
+      win.root.quaternion.copy(quat);
     }
   }
 
   _endResize() {
-    const win = this._resizeState.window;
-    if (win) {
-      win.resizing = false;
-      // Reset scale and do a proper rebuild at the final size
-      win.root.scale.set(1, 1, 1);
-      const pos = [win.root.position.x, win.root.position.y, win.root.position.z];
-      const quat = win.root.quaternion.clone();
-      while (win.root.children.length > 0) {
-        win.root.remove(win.root.children[0]);
-      }
-      const BORDER = 0.006;
-      const TITLEBAR_H = 0.035;
-      win._buildFrame(win.width, win.height);
-      win._buildContent(win.width, win.height, BORDER, TITLEBAR_H);
-      win._buildTitleBar(win.width, TITLEBAR_H, BORDER);
-      win._buildBorders(win.width, win.height, BORDER, TITLEBAR_H);
-      win._buildResizeHandles(win.width, win.height, BORDER, TITLEBAR_H);
-      win.root.quaternion.copy(quat);
+    if (this._resizeState.window) {
+      this._resizeState.window.resizing = false;
     }
     this._resizeState.active = false;
     this._resizeState.window = null;
@@ -839,8 +810,95 @@ class WindowManager {
   // ── Hand-based hover detection ────────────────────────────────
 
   updateHandHover(handIdx, fingerTipPos) {
-    if (!fingerTipPos) return;
+    if (!fingerTipPos) {
+      // Finger lost — end any active touch
+      const ft = this._fingerTouchState[handIdx];
+      if (ft.active && ft.window && ft.window.onContentInteraction) {
+        ft.window.onContentInteraction(null, 'end', handIdx);
+      }
+      ft.active = false;
+      ft.window = null;
+      return;
+    }
 
+    // ── Finger touch interaction (index finger pushing into content) ──
+    const TOUCH_ENTER_DIST = 0.025;  // 2.5cm — finger must be this close to surface to start
+    const TOUCH_EXIT_DIST  = 0.06;   // 6cm — finger must move this far to disengage
+
+    const ft = this._fingerTouchState[handIdx];
+
+    // Skip finger-touch if this hand is pinching content or dragging
+    const ci = this._contentInteraction[handIdx];
+    const ds = this._handDragState[handIdx];
+    const gs = this._handGrabState[handIdx];
+    if (ci.active || ds.dragging || gs.grabbing) {
+      if (ft.active && ft.window && ft.window.onContentInteraction) {
+        ft.window.onContentInteraction(null, 'end', handIdx);
+      }
+      ft.active = false;
+      ft.window = null;
+    } else {
+      // Check if finger is touching a window's content surface
+      let touchedWin = null;
+      let bestDist = Infinity;
+
+      for (const win of this.windows) {
+        if (win.closed || !win.visible) continue;
+        if (!win.contentMesh || !win.onContentInteraction) continue;
+
+        // Project finger tip into the content mesh's local space
+        const invMatrix = new THREE.Matrix4().copy(win.contentMesh.matrixWorld).invert();
+        const localPt = fingerTipPos.clone().applyMatrix4(invMatrix);
+
+        // Content mesh is a PlaneGeometry centered at origin
+        // localPt.z is distance from the plane surface
+        // localPt.x, localPt.y tell us if we're within the content bounds
+        const halfW = (win._contentW || 0.5) / 2;
+        const halfH = (win._contentH || 0.4) / 2;
+        const planeDist = Math.abs(localPt.z);
+        const inBounds = Math.abs(localPt.x) < halfW && Math.abs(localPt.y) < halfH;
+
+        if (inBounds && planeDist < bestDist) {
+          bestDist = planeDist;
+          touchedWin = win;
+        }
+      }
+
+      if (ft.active) {
+        // Already touching — check if still close enough
+        if (ft.window && touchedWin === ft.window && bestDist < TOUCH_EXIT_DIST) {
+          // Still touching same window — compute scroll delta
+          const delta = fingerTipPos.clone().sub(ft.lastPoint);
+          const localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(ft.window.root.quaternion);
+          const scrollDot = delta.dot(localUp);
+
+          if (ft.window.onContentInteraction) {
+            ft.window.onContentInteraction({ y: scrollDot }, 'move', handIdx);
+          }
+          ft.lastPoint.copy(fingerTipPos);
+        } else {
+          // Lost contact — end touch
+          if (ft.window && ft.window.onContentInteraction) {
+            ft.window.onContentInteraction(null, 'end', handIdx);
+          }
+          ft.active = false;
+          ft.window = null;
+        }
+      } else if (touchedWin && bestDist < TOUCH_ENTER_DIST) {
+        // Start new finger touch
+        ft.active = true;
+        ft.window = touchedWin;
+        ft.lastPoint.copy(fingerTipPos);
+        ft.scrollAccum = 0;
+
+        const invMatrix = new THREE.Matrix4().copy(touchedWin.contentMesh.matrixWorld).invert();
+        const localPoint = fingerTipPos.clone().applyMatrix4(invMatrix);
+        touchedWin.onContentInteraction(localPoint, 'start', handIdx);
+        touchedWin.focus();
+      }
+    }
+
+    // ── Standard hover detection ──
     for (const win of this.windows) {
       if (win.closed || !win.visible) continue;
 
