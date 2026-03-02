@@ -4,12 +4,18 @@
 # Dependencies
 node_modules/
 
+# Python cache
+__pycache__/
+*.pyc
+
 # Generated workspace (demo projects) — except vibe config
 workspace/*
 !workspace/.vibe/
 workspace/.vibe/*
 !workspace/.vibe/config.toml
 !workspace/.vibe/prompts/
+# Block recursive prompts copies (entrypoint bug)
+workspace/.vibe/prompts/prompts/
 
 # Test artifacts
 test-results/

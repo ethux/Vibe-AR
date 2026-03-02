@@ -61,7 +61,7 @@ ENV VIBE_HOME=/root/.vibe
 WORKDIR /workspace
 
 # Entrypoint: copy config to workspace .vibe/ on startup (volume mount overwrites build-time files)
-RUN printf '#!/bin/sh\nmkdir -p /workspace/.vibe/prompts\ncp /root/.vibe/config.toml /workspace/.vibe/config.toml 2>/dev/null || true\ncp -r /root/.vibe/prompts/ /workspace/.vibe/prompts/ 2>/dev/null || true\nexec "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+RUN printf '#!/bin/sh\nmkdir -p /workspace/.vibe/prompts\ncp /root/.vibe/config.toml /workspace/.vibe/config.toml 2>/dev/null || true\ncp /root/.vibe/prompts/*.md /workspace/.vibe/prompts/ 2>/dev/null || true\nexec "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
 # ttyd serves on 7681 by default
