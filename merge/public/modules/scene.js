@@ -183,6 +183,14 @@ export function initScene() {
   // Per-hand grab state for CodeCity
   const prevGrabState = [false, false];
 
+  // Back-swipe state (right hand pinch in empty space + 7cm move → go back)
+  let _backSwipeActive = false;
+  const _backSwipeStart = new THREE.Vector3();
+
+  // Fist rotation state (right hand)
+  let _fistRotating = false;
+  let _fistLastX = 0;
+
   // Gesture cooldown (ms)
   const GESTURE_COOLDOWN = 600;
 
@@ -241,8 +249,18 @@ export function initScene() {
                 tmpRay.ray.direction.set(0, 0, -1);
                 if (gitTree.handleRaycast(tmpRay)) continue;
               }
-              // Check file bubbles
-              if (bubbleMgr.handlePinch(p.pinchPoint)) continue;
+              // Check file bubbles — left/right distinction
+              if (src.handedness === 'left') {
+                if (bubbleMgr.handleLeftPinch(p.pinchPoint)) continue;
+              } else {
+                if (bubbleMgr.handlePinch(p.pinchPoint)) {
+                  _backSwipeActive = false;
+                  continue;
+                }
+                // Right pinch in empty space → start back-swipe tracking
+                _backSwipeActive = true;
+                _backSwipeStart.copy(p.pinchPoint);
+              }
               // Fall through to WindowManager
               wm.onPinchStart(handIdx, p.pinchPoint);
             }
@@ -251,6 +269,13 @@ export function initScene() {
           } else if (!p.pinching && s.pinching) {
             s.pinching = false;
             wm.onPinchEnd(handIdx);
+            // Back-swipe: right hand pinch released after 7cm move → go back
+            if (src.handedness === 'right' && _backSwipeActive) {
+              _backSwipeActive = false;
+              if (p.pinchPoint && p.pinchPoint.distanceTo(_backSwipeStart) >= 0.07) {
+                bubbleMgr.navigateBack();
+              }
+            }
           }
 
           // ── Palm open/close → mascot character + voice control (RIGHT HAND ONLY) ──
@@ -298,16 +323,23 @@ export function initScene() {
             anim.wasOpen = isPointing;
           }
 
-          // ── Fist detection → CodeCity grab interaction ──
+          // ── Fist detection → CodeCity grab + right hand rotates bubbles ──
           const fistResult = detectFist(src, frame, ref);
           if (fistResult.fisting && !prevGrabState[handIdx]) {
             prevGrabState[handIdx] = true;
             if (fistResult.wristPos) codeCity.onGrabStart(handIdx, fistResult.wristPos);
+            if (src.handedness === 'right') { _fistRotating = true; _fistLastX = fistResult.wristPos?.x ?? 0; }
           } else if (fistResult.fisting && prevGrabState[handIdx]) {
             if (fistResult.wristPos) codeCity.onGrabMove(handIdx, fistResult.wristPos);
+            if (src.handedness === 'right' && _fistRotating && fistResult.wristPos) {
+              const dx = fistResult.wristPos.x - _fistLastX;
+              _fistLastX = fistResult.wristPos.x;
+              if (Math.abs(dx) > 0.0005) bubbleMgr.rotateBubbles(dx);
+            }
           } else if (!fistResult.fisting && prevGrabState[handIdx]) {
             prevGrabState[handIdx] = false;
             codeCity.onGrabEnd(handIdx);
+            if (src.handedness === 'right') _fistRotating = false;
           }
 
           // Track right hand for CodeCity tooltips
