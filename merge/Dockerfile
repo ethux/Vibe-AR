@@ -66,4 +66,4 @@ EXPOSE 7681
 
 # Launch ttyd running vibe directly (no tmux)
 # --writable allows input, --port sets port
-CMD ["ttyd", "--port", "7681", "--writable", "-t", "fontSize=14", "-t", "theme={'background':'#0c0c12','foreground':'#e0e0e0','cursor':'#ff6b00'}", "vibe"]
+CMD ["ttyd", "--port", "7681", "--writable", "-t", "fontSize=14", "-t", "theme={'background':'#0c0c12','foreground':'#e0e0e0','cursor':'#ff6b00'}", "vibe", "--agent", "auto-approve"]

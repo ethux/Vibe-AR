@@ -18,6 +18,8 @@ import { GitTreeRenderer } from './git-tree.js';
 import { LivePreviewManager } from './live-preview.js';
 import { HandRenderer } from './HandRenderer.js';
 import { initSceneControl } from './scene-control.js';
+import { StreamScreenWindow } from './StreamScreenWindow.js';
+import { FileViewerWindow } from './FileViewerWindow.js';
 
 let scene, camera, clock;
 let wm, termWin, kbBtnMesh, micBtnMesh;
@@ -27,6 +29,8 @@ let bubbleMgr; // file bubble browser
 let gitTree;   // 3D git history tree
 let livePreview; // dev server preview manager
 let handRenderer; // 3D glove hand models
+let streamScreen; // live Mac screen stream
+let fileViewer;   // code/image file viewer
 
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
@@ -82,14 +86,14 @@ export function initScene() {
   // ── Hand Renderer (3D glove models) ──
   handRenderer = new HandRenderer(scene);
 
-  // ── Live Preview: feed terminal output for server detection ──
-  addTermOutputListener((text) => {
-    const result = livePreview.detectServer(text);
-    if (result.detected) livePreview.openPreview(result.port, result.framework);
-  });
+  // ── Stream Screen Window (Mac screen capture) ──
+  streamScreen = new StreamScreenWindow(wm);
+
+  // ── File Viewer (code editor / image preview) ──
+  fileViewer = new FileViewerWindow(wm);
 
   // ── Scene Control (MCP WebSocket bridge) ──
-  initSceneControl({ gitTree, bubbleMgr, codeCity, wm });
+  initSceneControl({ gitTree, bubbleMgr, codeCity, wm, streamScreen, livePreview, fileViewer });
 
   // ── KB + MIC buttons on the title bar ──
   const titleY = termWin.getTitleBarYOffset();
