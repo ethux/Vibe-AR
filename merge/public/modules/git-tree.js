@@ -55,27 +55,38 @@ class GitTreeRenderer {
 
   // ── Fetch git history via companion terminal ──────────────────
 
+  // Helper: run a git command via the web server's /api/git/run endpoint
+  async _gitRun(command, cwd) {
+    const params = new URLSearchParams({ command });
+    if (cwd) params.set('cwd', cwd);
+    const res = await fetch('/api/git/run?' + params.toString(), { method: 'POST' });
+    return res.json();
+  }
+
   async loadHistory() {
     try {
+      // The /api/git/run endpoint auto-discovers git repos in workspace/
+      // Test with a simple command — if it finds a repo, returncode=0
+      const checkData = await this._gitRun('git rev-parse --show-toplevel');
+      if (checkData.returncode !== 0) {
+        console.log('[GIT-TREE] No git repo found in workspace.');
+        return;
+      }
+      const repoPath = (checkData.stdout || '').trim();
+      console.log(`[GIT-TREE] Found git repo at: ${repoPath}`);
+
       // Fetch git log with structured format
-      const gitLogCmd = 'git log --all --oneline --graph --decorate --format="%H|%h|%s|%an|%ar|%D" -50';
-      const logRes = await fetch(
-        '/api/companion/terminal/run?command=' + encodeURIComponent(gitLogCmd) + '&cwd=.',
-        { method: 'POST' }
+      const logData = await this._gitRun(
+        'git log --all --oneline --graph --decorate --format="%H|%h|%s|%an|%ar|%D" -50'
       );
-      const logData = await logRes.json();
 
       if (logData.returncode !== 0) {
-        this._showError('Not a git repository or git not available.');
+        console.log('[GIT-TREE] Git repo has no commits yet.');
         return;
       }
 
       // Fetch current branch
-      const branchRes = await fetch(
-        '/api/companion/terminal/run?command=' + encodeURIComponent('git branch --show-current') + '&cwd=.',
-        { method: 'POST' }
-      );
-      const branchData = await branchRes.json();
+      const branchData = await this._gitRun('git branch --show-current');
       this.currentBranch = (branchData.stdout || '').trim();
 
       // Parse the log output
@@ -85,8 +96,7 @@ class GitTreeRenderer {
       this.clearTree();
       this.renderTree();
     } catch (e) {
-      console.error('[GIT-TREE] Failed to load history:', e);
-      this._showError('Failed to load git history: ' + (e.message || 'network error'));
+      console.warn('[GIT-TREE] Could not load history:', e.message || e);
     }
   }
 
@@ -732,12 +742,8 @@ class GitTreeRenderer {
 
     // Fetch diff stats
     try {
-      const diffCmd = `git diff ${commit.hash}~1 ${commit.hash} --stat 2>/dev/null || git show ${commit.hash} --stat --format=""`;
-      const diffRes = await fetch(
-        '/api/companion/terminal/run?command=' + encodeURIComponent(diffCmd) + '&cwd=.',
-        { method: 'POST' }
-      );
-      const diffData = await diffRes.json();
+      const diffCmd = `git show ${commit.hash} --stat --format=""`;
+      const diffData = await this._gitRun(diffCmd);
       const diffText = (diffData.stdout || '').trim();
 
       // Update window with diff info

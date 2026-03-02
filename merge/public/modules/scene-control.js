@@ -122,6 +122,28 @@ function _dispatch(cmd) {
       _runTerminalCommand(cmd.command);
       break;
 
+    // ── File visualization commands ──
+    case 'browse_folder':
+      if (bubbleMgr) bubbleMgr.loadFiles(cmd.path || '.');
+      break;
+
+    case 'highlight_file':
+      if (bubbleMgr) bubbleMgr.highlightFile(cmd.path, cmd.color, cmd.pulse);
+      break;
+
+    case 'file_change':
+      if (bubbleMgr) bubbleMgr.showFileChange(cmd.path, cmd.action, cmd.summary);
+      _showNotification(
+        `${(cmd.action || 'edit').toUpperCase()}: ${cmd.path}${cmd.summary ? ' — ' + cmd.summary : ''}`,
+        3,
+        cmd.action === 'create' ? '#22C55E' : cmd.action === 'delete' ? '#EF4444' : '#FF7000'
+      );
+      break;
+
+    case 'move_file_bubble':
+      if (bubbleMgr) bubbleMgr.moveFileBubble(cmd.path, cmd.position);
+      break;
+
     default:
       log(`[SCENE-CTRL] Unknown action: ${action}`);
   }
