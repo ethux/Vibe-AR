@@ -318,63 +318,58 @@ export function initScene() {
             wm.onPinchEnd(handIdx);
           }
 
-          // ── Palm open/close → mascot character + voice control ──
+          // ── Palm open/close → mascot character + voice control (RIGHT HAND ONLY) ──
           const now = performance.now();
           const handedness = src.handedness || (handIdx === 0 ? 'left' : 'right');
-          const palmResult = detectPalmOpen(src, frame, ref, handedness);
-          s.palmOpen = palmResult.open;
-          const anim = handAnimState[handIdx];
 
-          // Palm just opened → spawn mascot + start recording
-          if (s.palmOpen && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-            s.lastGestureTime = now;
-            // Spawn mascot above palm
-            if (anim.active) { anim.active.kill(); anim.active = null; }
-            const spawnPos = palmResult.palmCenter
-              ? palmResult.palmCenter.clone()
-              : new THREE.Vector3(0, 1.4, -0.5);
-            spawnPos.y += 0.08;
-            anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'recording' });
-            log(`[HAND] ${handedness} palm OPENED — mascot spawned, starting recording`);
-            // Start recording
-            if (!getIsRecording()) {
-              startRecording();
+          if (handedness === 'right') {
+            const palmResult = detectPalmOpen(src, frame, ref, handedness);
+            s.palmOpen = palmResult.open;
+            const anim = handAnimState[handIdx];
+
+            // Palm just opened → spawn mascot + start recording
+            if (s.palmOpen && !anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+              s.lastGestureTime = now;
+              // Spawn mascot above palm
+              if (anim.active) { anim.active.kill(); anim.active = null; }
+              const spawnPos = palmResult.palmCenter
+                ? palmResult.palmCenter.clone()
+                : new THREE.Vector3(0, 1.4, -0.5);
+              spawnPos.y += 0.08;
+              anim.active = animMgr.play('mascot-bounce', spawnPos, { mode: 'idle' });
+              log(`[HAND] right palm OPENED — mascot spawned, starting recording`);
+              // Start recording
+              if (!getIsRecording()) {
+                startRecording();
+              }
             }
+
+            // While palm open, follow hand (always orange)
+            if (s.palmOpen && anim.active && palmResult.palmCenter) {
+              const followPos = palmResult.palmCenter.clone();
+              followPos.y += 0.08;
+              anim.active.moveTo(followPos);
+            }
+
+            // Palm closed (any reason) → hide mascot + stop recording or TTS
+            if (!s.palmOpen && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
+              s.lastGestureTime = now;
+              // Hide mascot
+              if (anim.active) {
+                anim.active.fastHide(0.08);
+                anim.active = null;
+              }
+              if (getIsRecording()) {
+                log(`[HAND] right palm CLOSED — stopping recording`);
+                stopRecording();
+              } else if (isTtsSpeaking()) {
+                log(`[HAND] right palm CLOSED — stopping TTS`);
+                stopTTS();
+              }
+            }
+
+            anim.wasOpen = s.palmOpen;
           }
-
-          // While palm open, follow hand + update mode
-          if (s.palmOpen && anim.active && palmResult.palmCenter) {
-            const followPos = palmResult.palmCenter.clone();
-            followPos.y += 0.08;
-            anim.active.moveTo(followPos);
-            // Update mascot color based on state
-            if (getIsRecording()) {
-              anim.active.setMode('recording');
-            } else if (isTtsSpeaking()) {
-              anim.active.setMode('listening');
-            } else {
-              anim.active.setMode('idle');
-            }
-          }
-
-          // Palm closed (any reason) → hide mascot + stop recording or TTS
-          if (!s.palmOpen && anim.wasOpen && (now - s.lastGestureTime > GESTURE_COOLDOWN)) {
-            s.lastGestureTime = now;
-            // Hide mascot
-            if (anim.active) {
-              anim.active.fastHide(0.08);
-              anim.active = null;
-            }
-            if (getIsRecording()) {
-              log(`[HAND] ${handedness} palm CLOSED — stopping recording`);
-              stopRecording();
-            } else if (isTtsSpeaking()) {
-              log(`[HAND] ${handedness} palm CLOSED — stopping TTS`);
-              stopTTS();
-            }
-          }
-
-          anim.wasOpen = s.palmOpen;
 
           // Hand hover
           const indexTip = jointPos(src, 'index-finger-tip', frame, ref);
