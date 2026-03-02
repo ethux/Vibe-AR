@@ -479,6 +479,18 @@ class FileBubbleManager {
     return closest;
   }
 
+  // Raycast from hand direction to find a distant bubble (max 4m)
+  findBubbleByRay(origin, direction) {
+    const ray = new THREE.Raycaster(origin, direction.clone().normalize(), 0, 4);
+    const spheres = this.fileBubbles
+      .filter(b => !b.userData.inPalm && b.userData.sphere)
+      .map(b => b.userData.sphere);
+    if (!spheres.length) return null;
+    const hits = ray.intersectObjects(spheres);
+    if (!hits.length) return null;
+    return this.fileBubbles.find(b => b.userData.sphere === hits[0].object) || null;
+  }
+
   // Open a specific bubble (public entry point for drag-to-open)
   openBubble(bubble) {
     bubble.userData.scaleTarget = 1.3;
