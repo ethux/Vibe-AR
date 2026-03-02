@@ -55,8 +55,9 @@ function remap(t, a, b) { return clamp01((t - a) / (b - a)); }
 // ── The mascot draw function ──────────────────────────────────────
 // Faithfully reproduces the SVG: 140×140 body, 3 color bands, 2 square eyes
 // with rounded-rect clip, jump/squash/stretch/eye physics.
-// t = animation progress 0→1
-function drawMascot(ctx, t, canvasSize) {
+// t = animation progress 0→1, mode = 'idle' | 'recording' | 'listening'
+function drawMascot(ctx, t, canvasSize, mode) {
+  mode = mode || 'idle';
   const S = canvasSize;
   ctx.clearRect(0, 0, S, S);
 
@@ -247,12 +248,33 @@ function drawMascot(ctx, t, canvasSize) {
   ctx.clip();
 
   // SVG color bands: top 60/140, mid 40/140, bottom 40/140
-  ctx.fillStyle = '#FF9900';
-  ctx.fillRect(bx, by,            bodyW, bodyH * (60 / 140));
-  ctx.fillStyle = '#FF6600';
-  ctx.fillRect(bx, by + bodyH * (60 / 140),  bodyW, bodyH * (40 / 140));
-  ctx.fillStyle = '#FF3300';
-  ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
+  // Colors change based on mode
+  if (mode === 'recording') {
+    // Red pulsing for recording
+    const pulse = 0.7 + 0.3 * Math.sin(t * 20);
+    ctx.fillStyle = `rgba(255,${Math.floor(40*pulse)},${Math.floor(40*pulse)},1)`;
+    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
+    ctx.fillStyle = `rgba(200,${Math.floor(20*pulse)},${Math.floor(20*pulse)},1)`;
+    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
+    ctx.fillStyle = `rgba(150,${Math.floor(10*pulse)},${Math.floor(10*pulse)},1)`;
+    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
+  } else if (mode === 'listening') {
+    // Blue for TTS speaking
+    ctx.fillStyle = '#3B82F6';
+    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
+    ctx.fillStyle = '#2563EB';
+    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
+    ctx.fillStyle = '#1D4ED8';
+    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
+  } else {
+    // Default orange
+    ctx.fillStyle = '#FF9900';
+    ctx.fillRect(bx, by, bodyW, bodyH * (60 / 140));
+    ctx.fillStyle = '#FF6600';
+    ctx.fillRect(bx, by + bodyH * (60 / 140), bodyW, bodyH * (40 / 140));
+    ctx.fillStyle = '#FF3300';
+    ctx.fillRect(bx, by + bodyH * (100 / 140), bodyW, bodyH * (40 / 140));
+  }
 
   ctx.restore();
 
@@ -286,6 +308,24 @@ function drawMascot(ctx, t, canvasSize) {
   ctx.fillRect(ex(80), ey(100), 20 * scale, 20 * scale);
 
   ctx.restore();
+
+  // ── Status text below character ──
+  if (mode === 'recording') {
+    ctx.save();
+    ctx.fillStyle = '#FF3333';
+    ctx.font = `bold ${Math.floor(S * 0.06)}px monospace`;
+    ctx.textAlign = 'center';
+    const blink = Math.sin(Date.now() * 0.008) > 0;
+    if (blink) ctx.fillText('● REC', S / 2, S * 0.78 + S * 0.08);
+    ctx.restore();
+  } else if (mode === 'listening') {
+    ctx.save();
+    ctx.fillStyle = '#3B82F6';
+    ctx.font = `bold ${Math.floor(S * 0.05)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('♪ SPEAKING', S / 2, S * 0.78 + S * 0.08);
+    ctx.restore();
+  }
 }
 
 
@@ -311,6 +351,7 @@ class AnimationManager {
     const DUR    = overrides.duration ?? 2.5;  // seconds
     const FADEIN = overrides.fadeIn   ?? 0.12;
     const FADEOUT = overrides.fadeOut ?? 0.08;
+    const MODE   = overrides.mode    ?? 'idle';
 
     // Canvas + texture
     const canvas = document.createElement('canvas');
@@ -336,7 +377,7 @@ class AnimationManager {
     this.scene.add(mesh);
 
     // Draw first frame immediately so it doesn't pop in blank
-    drawMascot(ctx, 0, RES);
+    drawMascot(ctx, 0, RES, MODE);
     texture.needsUpdate = true;
 
     const inst = {
@@ -349,8 +390,11 @@ class AnimationManager {
       opacity: 0,
       stopping: false,
       finished: false,
+      mode: MODE,
+      res: RES,
 
       moveTo(pos) { this.origin.copy(pos); },
+      setMode(m) { this.mode = m; },
       stop()  { this.stopping = true; },
       fastHide(dur) { this.fadeOut = dur ?? 0.08; this.stopping = true; },
       kill()  { this.finished = true; },
@@ -390,9 +434,16 @@ class AnimationManager {
       }
       inst.mesh.material.opacity = inst.opacity;
 
-      // Redraw canvas — t clamped at 1.0 so it holds last frame
-      const t = Math.min(inst.time / inst.duration, 1.0);
-      drawMascot(inst.ctx, t, 512);
+      // Redraw canvas — loop for recording/listening, clamp for idle
+      let t = inst.time / inst.duration;
+      if (t > 1.0) {
+        if (inst.mode === 'recording' || inst.mode === 'listening') {
+          t = t % 1.0;  // loop the bounce
+        } else {
+          t = 1.0;  // hold last frame
+        }
+      }
+      drawMascot(inst.ctx, t, inst.res, inst.mode);
       inst.texture.needsUpdate = true;
 
       // Position + billboard
