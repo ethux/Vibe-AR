@@ -266,9 +266,18 @@ function _showNotification(message, duration = 3, color = '#FF7000') {
 async function _runTerminalCommand(command) {
   if (!command) return;
   try {
-    await fetch(`/api/companion/terminal/run?command=${encodeURIComponent(command)}&cwd=.`, {
+    // Send command to vibe-terminal via ttyd WebSocket (NOT companion container)
+    // This ensures dev servers run in the correct container where ports are exposed
+    log(`[SCENE-CTRL] Running command in vibe-terminal: ${command}`);
+    const resp = await fetch(`/api/terminal/exec?command=${encodeURIComponent(command)}`, {
       method: 'POST',
     });
+    const data = await resp.json();
+    if (!resp.ok) {
+      log(`[SCENE-CTRL] Terminal exec error: ${data.error}`);
+    } else {
+      log(`[SCENE-CTRL] Terminal exec ok: ${command}`);
+    }
   } catch (e) {
     log(`[SCENE-CTRL] Terminal command failed: ${e.message}`);
   }
