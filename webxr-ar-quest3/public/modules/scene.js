@@ -37,7 +37,7 @@ export function initScene() {
   // ── WindowManager + terminal window ──
   wm = new WindowManager(scene, renderer, camera);
   termWin = wm.createWindow({
-    title: 'MISTRAL VIBE',
+    title: 'VIBE AR',
     width: WIN_W,
     height: WIN_H,
     position: [0, 1.4, -0.7],
@@ -53,7 +53,7 @@ export function initScene() {
 
   const kbBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const kbBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('KB', 24, '#FF6B00', '#0c0c12', 96, 40),
+    map: makeTextTexture('KB', 24, '#FF7000', '#C0C0C0', 96, 40),
     transparent: true, depthWrite: true,
   });
   kbBtnMesh = new THREE.Mesh(kbBtnGeo, kbBtnMat);
@@ -62,7 +62,7 @@ export function initScene() {
 
   const micBtnGeo = new THREE.PlaneGeometry(0.06, 0.025);
   const micBtnMat = new THREE.MeshBasicMaterial({
-    map: makeTextTexture('MIC', 22, '#28c840', '#0c0c12', 96, 40),
+    map: makeTextTexture('MIC', 22, '#28c840', '#C0C0C0', 96, 40),
     transparent: true, depthWrite: true,
   });
   micBtnMesh = new THREE.Mesh(micBtnGeo, micBtnMat);
@@ -80,7 +80,7 @@ export function initScene() {
 
   function addRay(c) {
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-3)]);
-    c.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xff6b00 })));
+    c.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xFF7000 })));
   }
   addRay(ctrl0); addRay(ctrl1);
 

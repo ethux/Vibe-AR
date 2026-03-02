@@ -45,7 +45,12 @@
 
   <!-- Three.js r160 -->
   <script src="three.min.js"></script>
-  <!-- VRButton helper (we roll our own below) -->
+  <!-- Window Manager (load in order: utils → window → manager → animations) -->
+  <script src="PixelArt.js"></script>
+  <script src="ManagedWindow.js"></script>
+  <script src="WindowManager.js"></script>
+  <script src="AnimationManager.js"></script>
+  <!-- Main app -->
   <script src="app.js"></script>
 </body>
 </html>

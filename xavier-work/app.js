@@ -48,44 +48,46 @@ const handAnimState = [
   { active: null, wasOpen: false },  // right
 ];
 
-// Create the demo window with pixel-art Mistral-orange borders
+// Create the demo window — Windows 95 style
 const mainWindow = wm.createWindow({
-  title:    'VIBE AR',
+  title:    'Vibe AR',
   width:    0.6,
   height:   0.45,
   position: [0, 1.5, -0.8],
   content:  (ctx, w, h) => {
-    // Black background is already drawn by the manager
-    ctx.fillStyle = '#F97316';
-    ctx.font = 'bold 28px monospace';
-    ctx.fillText('HELLO FROM WEBXR AR!', 30, 50);
+    // White background with inset border is drawn by the manager
+    ctx.fillStyle = '#000080';
+    ctx.font = 'bold 28px "MS Sans Serif", Arial, sans-serif';
+    ctx.fillText('Welcome to WebXR AR!', 30, 50);
 
-    ctx.fillStyle = '#FFB347';
-    ctx.font = '22px monospace';
+    ctx.fillStyle = '#000000';
+    ctx.font = '20px "MS Sans Serif", Arial, sans-serif';
     const lines = [
       '',
-      '  OPEN YOUR PALM TO',
-      '  SUMMON A MAGIC BUBBLE',
+      '  Open your palm to',
+      '  summon a magic bubble',
       '',
-      '  PINCH THE TITLE BAR',
-      '  TO DRAG THIS WINDOW',
+      '  Pinch the title bar',
+      '  to drag this window',
       '',
-      '  CONTROLLERS WORK TOO',
+      '  Controllers work too!',
     ];
-    lines.forEach((l, i) => ctx.fillText(l, 20, 90 + i * 32));
+    lines.forEach((l, i) => ctx.fillText(l, 20, 90 + i * 30));
   }
 });
 
 // ── Example: teammates can easily create more windows ──
 // const secondWindow = wm.createWindow({
-//   title:    'TERMINAL',
+//   title:    'Command Prompt',
 //   width:    0.5,
 //   height:   0.35,
 //   position: [0.4, 1.5, -0.9],
 //   content:  (ctx, w, h) => {
-//     ctx.fillStyle = '#00ff00';
-//     ctx.font = '20px monospace';
-//     ctx.fillText('$ whoami', 20, 30);
+//     ctx.fillStyle = '#C0C0C0';
+//     ctx.fillRect(0, 0, w, h);
+//     ctx.fillStyle = '#000000';
+//     ctx.font = '18px "Courier New", monospace';
+//     ctx.fillText('C:\\> whoami', 20, 30);
 //     ctx.fillText('mistral-hacker', 20, 55);
 //   }
 // });
