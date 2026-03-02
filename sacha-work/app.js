@@ -35,7 +35,6 @@ renderer.shadowMap.enabled = true;
 const WINDOW_W = 0.6;
 const WINDOW_H = 0.45;
 const TITLEBAR_H = 0.06;
-const CORNER_R = 0.015;
 
 // -- Window body
 const bodyGeo = new THREE.PlaneGeometry(WINDOW_W, WINDOW_H);
@@ -172,26 +171,30 @@ const FOLDER_ICON = {
 };
 
 const iconCache = {};
-function loadIconTexture(path) {
-  if (iconCache[path]) return Promise.resolve(iconCache[path]);
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const c = document.createElement('canvas'); c.width = 128; c.height = 128;
-      const ctx = c.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, 0, 0, 128, 128);
-      const tex = new THREE.CanvasTexture(c);
-      tex.minFilter = THREE.NearestFilter;
-      tex.magFilter = THREE.NearestFilter;
-      iconCache[path] = tex;
-      resolve(tex);
-    };
-    img.onerror = () => resolve(null);
-    img.src = path;
-  });
+
+// Build bubble texture: just the pixel art icon, no background or border
+function buildBubbleTexture(fileData, color, iconImg) {
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+
+  if (iconImg) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(iconImg, 0, 0, S, S);
+  } else {
+    // Fallback: colored circle
+    const hex = '#' + color.toString(16).padStart(6, '0');
+    ctx.fillStyle = hex;
+    ctx.beginPath(); ctx.arc(S / 2, S / 2, S / 2 - 4, 0, Math.PI * 2); ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  return tex;
 }
+
 function getIconPath(fileData) {
   if (fileData.type === 'folder') {
     const n = fileData.name.toLowerCase();
@@ -201,72 +204,78 @@ function getIconPath(fileData) {
   return EXT_ICON[ext] ? 'icons/files/' + EXT_ICON[ext] + '.svg' : null;
 }
 
-const fileBubbles = [];
-let grabbedBubble = null;
-let grabController = null;
-let grabOffset = new THREE.Vector3();
+function loadImg(src) {
+  return new Promise(res => {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload = () => res(img);
+    img.onerror = () => res(null);
+    img.src = src;
+  });
+}
 
-const sharedSphereGeo = new THREE.SphereGeometry(1, 16, 16);
+const fileBubbles = [];
 let openedBubble = null;
 
 function createFileBubble(fileData, index, total) {
   const ext = (fileData.ext || fileData.name.split('.').pop() || '').toLowerCase();
   const color = EXT_COLORS[ext] || (fileData.type === 'folder' ? 0xFF7000 : EXT_COLORS.default);
-  const size = fileData.type === 'folder' ? 0.052 : 0.038;
+  const cardW = fileData.type === 'folder' ? 0.11 : 0.095;
   const group = new THREE.Group();
-
-  // Sphere — semi-transparent so icon shows through
-  const mat = new THREE.MeshStandardMaterial({
-    color, roughness: 0.15, metalness: 0.4,
-    emissive: color, emissiveIntensity: 0.3,
-    transparent: true, opacity: 0.45,
-  });
-  const sphere = new THREE.Mesh(sharedSphereGeo, mat);
-  sphere.scale.setScalar(size);
-  sphere.renderOrder = 0;
-  group.add(sphere);
-  group.userData.sphere = sphere;
-  group.userData.sphereMat = mat;
   group.userData.fileData = fileData;
   group.userData.opened = false;
+  group.userData.color = color;
 
-  // Pixel-art icon sprite (always faces camera, centered on bubble)
+  // Placeholder sprite while icon loads (colored square)
+  const placeholderMat = new THREE.SpriteMaterial({ color, transparent: true, opacity: 0.6, sizeAttenuation: true });
+  const placeholder = new THREE.Sprite(placeholderMat);
+  placeholder.scale.set(cardW, cardW, 1);
+  placeholder.renderOrder = 1;
+  group.userData.cardSprite = placeholder;
+  group.userData.cardMat = placeholderMat;
+  scene.add(placeholder);
+
+  // Load icon and rebuild full bubble card texture
   const iconPath = getIconPath(fileData);
-  if (iconPath) {
-    loadIconTexture(iconPath).then(tex => {
-      if (!tex) return;
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: true }));
-      sp.scale.set(size * 1.4, size * 1.4, 1);
-      sp.renderOrder = 2;
-      group.userData.iconSprite = sp;
-      scene.add(sp);
-    });
-  }
+  loadImg(iconPath).then(iconImg => {
+    const tex = buildBubbleTexture(fileData, color, iconImg);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: true });
+    placeholder.material = mat;
+    placeholder.scale.set(cardW, cardW, 1);
+    group.userData.cardMat = mat;
+  });
 
-  // Label sprite below the bubble
+  // Label sprite below the icon
   const lc = document.createElement('canvas'); lc.width = 256; lc.height = 48;
   const lctx = lc.getContext('2d');
   lctx.clearRect(0, 0, 256, 48);
-  lctx.fillStyle = 'rgba(20,20,40,0.75)'; lctx.fillRect(8, 4, 240, 40);
+  lctx.fillStyle = 'rgba(10,10,20,0.75)'; lctx.fillRect(4, 2, 248, 44);
   lctx.fillStyle = '#ffffff'; lctx.font = 'bold 22px monospace';
   lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
-  const dn = fileData.name.length > 18 ? fileData.name.substring(0, 16) + '..' : fileData.name;
+  const dn = fileData.name.length > 16 ? fileData.name.substring(0, 14) + '..' : fileData.name;
   lctx.fillText(dn, 128, 24);
   const ltex = new THREE.CanvasTexture(lc); ltex.minFilter = THREE.LinearFilter;
   const lsp = new THREE.Sprite(new THREE.SpriteMaterial({ map: ltex, transparent: true, depthWrite: false, sizeAttenuation: true }));
-  lsp.scale.set(size * 2.8, size * 0.55, 1);
+  lsp.scale.set(cardW * 2.2, cardW * 0.42, 1);
   lsp.renderOrder = 2;
   group.userData.labelSprite = lsp;
   scene.add(lsp);
 
-  // Glow ring (shown when file is opened)
-  const ringGeo = new THREE.RingGeometry(size * 1.1, size * 1.5, 32);
+  // Glow halo ring (shown when opened/in palm) — separate scene object
+  const ringGeo = new THREE.RingGeometry(cardW * 0.55, cardW * 0.75, 32);
   const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
   const ring = new THREE.Mesh(ringGeo, ringMat);
-  ring.renderOrder = 1;
+  ring.renderOrder = 0;
   group.userData.glowRing = ring;
   group.userData.glowRingMat = ringMat;
   scene.add(ring);
+
+  // Keep a dummy sphere for raycasting (invisible)
+  const hitGeo = new THREE.SphereGeometry(cardW * 0.55, 8, 8);
+  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+  const hitSphere = new THREE.Mesh(hitGeo, hitMat);
+  group.add(hitSphere);
+  group.userData.sphere = hitSphere;
+  group.userData.sphereMat = null; // no visual sphere anymore
 
   const angle = (index / total) * Math.PI * 1.6 - Math.PI * 0.8;
   const radius = 0.7 + (index % 3) * 0.12;
@@ -278,7 +287,8 @@ function createFileBubble(fileData, index, total) {
   group.userData.basePos = new THREE.Vector3(x, y, z);
   group.userData.restPos = new THREE.Vector3(x, y, z);
   group.userData.index = index;
-  group.userData.size = size;
+  group.userData.size = cardW;
+  group.userData.cardW = cardW;
   group.userData.bobSpeed = 0.5 + Math.random() * 0.8;
   group.userData.bobAmp = 0.008 + Math.random() * 0.012;
   group.userData.grabbed = false;
@@ -350,9 +360,10 @@ async function loadFiles(dirPath) {
   currentPath = dirPath;
   openedBubble = null;
   fileBubbles.forEach(b => {
-    if (b.userData.iconSprite) scene.remove(b.userData.iconSprite);
+    if (b.userData.cardSprite) scene.remove(b.userData.cardSprite);
     if (b.userData.labelSprite) scene.remove(b.userData.labelSprite);
     if (b.userData.glowRing) scene.remove(b.userData.glowRing);
+    if (b.userData.iconSprite) scene.remove(b.userData.iconSprite);
     scene.remove(b);
   });
   fileBubbles.length = 0;
@@ -419,54 +430,24 @@ let dragging = false;
 let activeController = null;
 let dragOffset = new THREE.Vector3();
 
-// We track select events (trigger press) on each controller
+// Controller: only window drag supported (bubbles are hand-tracking only)
 function onSelectStart(event) {
   const ctrl = event.target;
   tempMatrix.identity().extractRotation(ctrl.matrixWorld);
   raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
   raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
 
-  // Check bubbles first
-  const bubbleSpheres = fileBubbles.map(b => b.userData.sphere);
-  const bubbleHits = raycaster.intersectObjects(bubbleSpheres, false);
-  if (bubbleHits.length > 0) {
-    const hitSphere = bubbleHits[0].object;
-    const bubble = fileBubbles.find(b => b.userData.sphere === hitSphere);
-    if (bubble && !grabbedBubble) {
-      grabbedBubble = bubble;
-      grabController = ctrl;
-      bubble.userData.grabbed = true;
-      bubble.userData.scaleTarget = 1.6;
-      bubble.userData.glowTarget = 0.9;
-      grabOffset.copy(bubble.position).sub(bubbleHits[0].point);
-      return;
-    }
-  }
-
-  // Then check title bar
-  const titleBarWorld = titleBar;
-  const hits = raycaster.intersectObject(titleBarWorld, true);
+  const hits = raycaster.intersectObject(titleBar, true);
   if (hits.length > 0) {
     dragging = true;
     activeController = ctrl;
-    const hitPoint = hits[0].point;
-    dragOffset.copy(windowBody.position).sub(hitPoint);
+    dragOffset.copy(windowBody.position).sub(hits[0].point);
     borderMat.opacity = 0.7;
     titleMat.color.set(0x5a5a8c);
   }
 }
 
 function onSelectEnd(event) {
-  // Release bubble
-  if (grabbedBubble && event.target === grabController) {
-    grabbedBubble.userData.grabbed = false;
-    grabbedBubble.userData.scaleTarget = 1;
-    grabbedBubble.userData.glowTarget = 0.35;
-    grabbedBubble.userData.restPos.copy(grabbedBubble.position);
-    grabbedBubble = null;
-    grabController = null;
-  }
-
   if (dragging && event.target === activeController) {
     dragging = false;
     activeController = null;
@@ -1031,26 +1012,13 @@ renderer.setAnimationLoop((timestamp, frame) => {
   }
 
   // ── Animate file bubbles ──
-  // Move grabbed bubble with controller
-  if (grabbedBubble && grabController) {
-    tempMatrix.identity().extractRotation(grabController.matrixWorld);
-    raycaster.ray.origin.setFromMatrixPosition(grabController.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-    const dist = grabbedBubble.position.distanceTo(raycaster.ray.origin);
-    const target = raycaster.ray.origin.clone()
-      .add(raycaster.ray.direction.clone().multiplyScalar(Math.min(dist, 0.5)));
-    target.add(grabOffset);
-    grabbedBubble.position.lerp(target, 0.4);
-  }
-
   fileBubbles.forEach((group) => {
     const d = group.userData;
 
     if (d.inPalm && leftPalmCenter) {
-      // Orbit around left palm like electrons
+      // Orbit around left palm — slow, peaceful
       const total = Math.max(palmBubbles.length, 1);
-      const orbitR = 0.06 + total * 0.015;
+      const orbitR = 0.07 + total * 0.018;
       const speed = 1.5 + d.palmOrbitIndex * 0.3;
       const angle = elapsed * speed + (d.palmOrbitIndex / total) * Math.PI * 2;
       const tiltAngle = d.palmOrbitIndex * 0.6;
@@ -1060,23 +1028,6 @@ renderer.setAnimationLoop((timestamp, frame) => {
       const tz = leftPalmCenter.z + Math.sin(angle) * Math.cos(tiltAngle) * orbitR;
 
       group.position.lerp(new THREE.Vector3(tx, ty, tz), 0.15);
-
-    } else if (d.destroying) {
-      // Shrink to nothing then remove from scene
-      const s = group.scale.x;
-      if (s < 0.02) {
-        group.visible = false;
-        d.inPalm = false;
-        d.destroying = false;
-        // Respawn at original position after a delay
-        setTimeout(() => {
-          group.visible = true;
-          group.position.copy(d.basePos);
-          d.restPos.copy(d.basePos);
-          d.scaleTarget = 1;
-          d.glowTarget = 0.25;
-        }, 2000);
-      }
 
     } else if (!d.grabbed && !d.inPalm) {
       // Free floating
@@ -1091,51 +1042,43 @@ renderer.setAnimationLoop((timestamp, frame) => {
     const scaleDiff = d.scaleTarget - currentScale;
     group.scale.setScalar(currentScale + scaleDiff * 0.12);
 
-    // Glow — opened files pulse brighter
-    const bmat = d.sphereMat;
-    if (bmat) {
-      let targetGlow, targetOpacity;
-      if (d.opened) {
-        targetGlow = 0.7 + Math.sin(elapsed * 2.5) * 0.2;
-        targetOpacity = 0.4;
-      } else if (d.inPalm) {
-        targetGlow = 0.55;
-        targetOpacity = 0.4;
-      } else if (d.grabbed) {
-        targetGlow = 0.8;
-        targetOpacity = 0.5;
-      } else {
-        targetGlow = 0.3;
-        targetOpacity = 0.45;
-      }
-      bmat.emissiveIntensity += (targetGlow - bmat.emissiveIntensity) * 0.12;
-      bmat.opacity += (targetOpacity - bmat.opacity) * 0.1;
-    }
-
-    // Position icon + label sprites at bubble world position
+    // Get world position of the group center
     const bwp = new THREE.Vector3();
     group.getWorldPosition(bwp);
     const s = Math.max(group.scale.x, 0.01);
-    if (d.iconSprite) {
-      d.iconSprite.position.copy(bwp);
-      d.iconSprite.visible = group.visible;
-      d.iconSprite.scale.set(d.size * 1.4 * s, d.size * 1.4 * s, 1);
+    const cardW = d.cardW || 0.095;
+
+    // Position & scale the card sprite (the main bubble visual)
+    if (d.cardSprite) {
+      d.cardSprite.position.copy(bwp);
+      d.cardSprite.visible = group.visible;
+      const pulse = d.opened ? 1 + Math.sin(elapsed * 3) * 0.04 : 1;
+      d.cardSprite.scale.set(cardW * s * pulse, cardW * s * pulse, 1);
     }
+    // Label below icon
     if (d.labelSprite) {
       d.labelSprite.position.copy(bwp);
-      d.labelSprite.position.y -= d.size * s + 0.015;
+      d.labelSprite.position.y -= cardW * s * 0.7;
       d.labelSprite.visible = group.visible;
-      d.labelSprite.scale.set(d.size * 2.8 * s, d.size * 0.55 * s, 1);
+      d.labelSprite.scale.set(cardW * 2.2 * s, cardW * 0.42 * s, 1);
     }
+
+    // Glow ring (orbits around card when opened or in palm)
     if (d.glowRing) {
       d.glowRing.position.copy(bwp);
-      d.glowRing.visible = group.visible && d.opened;
+      d.glowRing.visible = group.visible && (d.opened || d.inPalm);
       d.glowRing.scale.setScalar(s);
       const rc = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
       const rcp = new THREE.Vector3(); rc.getWorldPosition(rcp);
       d.glowRing.lookAt(rcp);
-      if (d.glowRingMat && d.opened) {
-        d.glowRingMat.opacity = 0.35 + Math.sin(elapsed * 3) * 0.15;
+      if (d.glowRingMat) {
+        if (d.opened) {
+          d.glowRingMat.opacity = 0.5 + Math.sin(elapsed * 3) * 0.2;
+        } else if (d.inPalm) {
+          d.glowRingMat.opacity = 0.3 + Math.sin(elapsed * 2) * 0.1;
+        } else {
+          d.glowRingMat.opacity = Math.max(0, d.glowRingMat.opacity - 0.05);
+        }
       }
     }
   });
