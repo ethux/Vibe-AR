@@ -499,10 +499,12 @@ class ManagedWindow {
   getTitleBarYOffset() { return this._contentH / 2 + this._titleH / 2; }
 
   close() {
+    if (this.closed) return; // prevent double-close
     this.closed = true;
     this.root.visible = false;
     this.scene.remove(this.root);
-    this.manager._removeWindow(this);
+    // Defer removal from the windows array so we don't splice during iteration
+    queueMicrotask(() => this.manager._removeWindow(this));
   }
 
   minimize() {

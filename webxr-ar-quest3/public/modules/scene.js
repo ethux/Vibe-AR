@@ -267,7 +267,7 @@ export function initScene() {
     const termWs = getTermWs();
 
     // Terminal texture → draw onto window's content canvas
-    if (termWs && termWs.readyState === WebSocket.OPEN) {
+    if (termWs && termWs.readyState === WebSocket.OPEN && termWin && !termWin.closed) {
       renderTermToCanvas();
       const ctx = termWin.contentCtx;
       ctx.drawImage(termRenderCanvas, 0, 0, termWin.CANVAS_W, termWin.CANVAS_H);
