@@ -1,15 +1,12 @@
 # Vibe AR — Vibecoding in Augmented Reality - Mistral AI World Wide Hackathon Paris 2026
 
+[ethux](https://github.com/ethux) | [Min0laa](https://github.com/Min0laa) | [TR-MZ](https://github.com/TR-MZ)
+
 Vibecoding, but in AR. Put on a Meta Quest 3, talk to your AI coding assistant, and watch it build your app — all floating in front of you in mixed reality.
 
 Built with Mistral AI (Voxtral STT + Devstral/Mistral Large), ElevenLabs TTS, Three.js, and WebXR.
 
 > **Status:** Early prototype — the core loop works (voice → code → preview) but not all features are fully polished yet. Lots of improvements to come!
-
-## Team
-- [ethux](https://github.com/ethux)
-- [Min0laa](https://github.com/Min0laa)
-- [TR-MZ](https://github.com/TR-MZ)
 
 ## Features
 
