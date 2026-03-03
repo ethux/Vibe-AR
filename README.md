@@ -80,6 +80,9 @@ Open the HTTPS URL directly in Quest Browser, or tunnel if needed:
 ngrok http 3000
 ```
 
+### Test Addition
+This is a test line added from the dev-cloud-test branch.
+
 ## Configuration
 
 Vibe CLI config lives at `workspace/.vibe/config.toml` — configures Mistral models, API proxy routing, and MCP server connections.
