@@ -6,6 +6,11 @@ Built with Mistral AI (Voxtral STT + Devstral/Mistral Large), ElevenLabs TTS, Th
 
 > **Status:** Early prototype — the core loop works (voice → code → preview) but not all features are fully polished yet. Lots of improvements to come!
 
+## Team
+- [TR-MZ](https://github.com/TR-MZ)
+- [Min0laa](https://github.com/Min0laa)
+- [ethux](https://github.com/ethux)
+
 ## Features
 
 ### Working
